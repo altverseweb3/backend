@@ -23,7 +23,8 @@ zip -r lambda_function.zip .
 
 echo "zip created"
 
-# Corrected rm -rf syntax
-rm -rf $(find . -maxdepth 1 -not -name 'lambda_function.py' -not -name 'lambda_function.zip' -not -name 'README.md' -not -name 'requirements.txt' -not -name 'lambda.sh' -print)
+# Clean up 
+# TODO: improve syntax
+rm -rf $(find . -maxdepth 1 -not -name 'lambda_function.py' -not -name 'lambda_function.zip' -not -name 'README.md' -not -name 'requirements.txt' -not -name 'lambda.sh' -not -name 'tests.md' -print)
 
 echo "Cleanup complete."

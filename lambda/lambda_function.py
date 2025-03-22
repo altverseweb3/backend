@@ -7,7 +7,7 @@ import requests
 # {
 #   "path": "/test" | "/balances" | "/allowance" | "/metadata",
 #   "httpMethod": "GET" | "POST" | "ANY" | "PUT",
-#   "queryStringParameters": {...}
+#   "body": "JSON string"
 # }
 def lambda_handler(event, context):
     if event["path"] == "/test":
@@ -32,7 +32,7 @@ def lambda_handler(event, context):
 
 # Expected event structure for /balances:
 # {
-#   "queryStringParameters": {
+#   "body": {
 #     "network": "string", // Required: EVM network name (e.g., "eth-mainnet")
 #     "userAddress": "string", // Required: EVM wallet address
 #     "contractAddresses": "string" // Optional: Comma-separated list of token contract addresses
@@ -47,11 +47,14 @@ def lambda_handler(event, context):
 # ]
 # https://docs.alchemy.com/reference/alchemy-gettokenbalances
 def handle_balances(event):
-    query_params = event.get("queryStringParameters", {}) or {}
+    try:
+        body = json.loads(event.get("body", "{}"))
+    except json.JSONDecodeError:
+        return build_response(400, {"error": "Invalid JSON body"})
 
-    network = query_params.get("network")
-    user_address = query_params.get("userAddress")
-    contract_addresses = query_params.get("contractAddresses")
+    network = body.get("network")
+    user_address = body.get("userAddress")
+    contract_addresses = body.get("contractAddresses")
 
     if not network or not user_address:
         return build_response(
@@ -91,7 +94,7 @@ def handle_balances(event):
 
 # Expected event structure for /allowance:
 # {
-#   "queryStringParameters": {
+#   "body": {
 #     "network": "string", // Required: EVM network name
 #     "userAddress": "string", // Required: Owner's EVM wallet address
 #     "contractAddress": "string", // Required: Token contract address
@@ -104,12 +107,15 @@ def handle_balances(event):
 # }
 # https://docs.alchemy.com/reference/alchemy-gettokenallowance
 def handle_allowance(event):
-    query_params = event.get("queryStringParameters", {}) or {}
+    try:
+        body = json.loads(event.get("body", "{}"))
+    except json.JSONDecodeError:
+        return build_response(400, {"error": "Invalid JSON body"})
 
-    network = query_params.get("network")
-    user_address = query_params.get("userAddress")
-    contract_address = query_params.get("contractAddress")
-    spender_address = query_params.get("spenderAddress")
+    network = body.get("network")
+    user_address = body.get("userAddress")
+    contract_address = body.get("contractAddress")
+    spender_address = body.get("spenderAddress")
 
     if not network or not user_address or not contract_address or not spender_address:
         return build_response(
@@ -144,7 +150,7 @@ def handle_allowance(event):
 
 # Expected event structure for /metadata:
 # {
-#   "queryStringParameters": {
+#   "body": {
 #     "network": "string", // Required: EVM network name
 #     "contractAddress": "string" // Required: Token contract address
 #   }
@@ -159,10 +165,13 @@ def handle_allowance(event):
 # }
 # https://docs.alchemy.com/reference/alchemy-gettokenmetadata
 def handle_metadata(event):
-    query_params = event.get("queryStringParameters", {}) or {}
+    try:
+        body = json.loads(event.get("body", "{}"))
+    except json.JSONDecodeError:
+        return build_response(400, {"error": "Invalid JSON body"})
 
-    network = query_params.get("network")
-    contract_address = query_params.get("contractAddress")
+    network = body.get("network")
+    contract_address = body.get("contractAddress")
 
     if not network or not contract_address:
         return build_response(
