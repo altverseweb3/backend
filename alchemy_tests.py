@@ -25,7 +25,6 @@ def test_get_token_balances():
     print("\n=== Testing Token Balances ===")
     params = [VITALIK_ADDRESS, [USDC_ADDRESS, DAI_ADDRESS]]
     response = call_alchemy("alchemy_getTokenBalances", params)
-
     print(f"Address: {VITALIK_ADDRESS}")
     if "result" in response:
         balances = response["result"]["tokenBalances"]
@@ -42,7 +41,6 @@ def test_get_allowance():
         {"owner": VITALIK_ADDRESS, "contract": DAI_ADDRESS, "spender": UNISWAP_ROUTER}
     ]
     response = call_alchemy("alchemy_getTokenAllowance", params)
-
     print(f"Owner: {VITALIK_ADDRESS}")
     print(f"Token: {DAI_ADDRESS}")
     print(f"Spender: {UNISWAP_ROUTER}")
@@ -54,20 +52,58 @@ def test_get_allowance():
 
 def test_get_token_metadata():
     print("\n=== Testing Token Metadata ===")
-
     tokens = [USDC_ADDRESS, DAI_ADDRESS]
     for token in tokens:
         print(f"\nChecking metadata for: {token}")
         params = [token]
         response = call_alchemy("alchemy_getTokenMetadata", params)
-
         if "result" in response:
             metadata = response["result"]
             print(f"Name: {metadata.get('name')}")
             print(f"Symbol: {metadata.get('symbol')}")
             print(f"Decimals: {metadata.get('decimals')}")
+            print(f"Logo: {metadata.get('logo')}")
         else:
             print("Error:", response.get("error", "Unknown error"))
+
+
+def test_get_token_prices():
+    print("\n=== Testing Token Prices ===")
+    # For the prices endpoint, we need to use a different API URL
+    url = f"https://api.g.alchemy.com/prices/v1/{ALCHEMY_API_KEY}/tokens/by-address"
+
+    # Define addresses to get prices for
+    addresses = [
+        {"network": "eth-mainnet", "address": USDC_ADDRESS},
+        {"network": "eth-mainnet", "address": DAI_ADDRESS},
+    ]
+
+    payload = {"addresses": addresses}
+
+    try:
+        response = requests.post(
+            url, headers={"Content-Type": "application/json"}, json=payload, timeout=10
+        )
+
+        if response.status_code == 200:
+            result = response.json()
+            print("Prices data:")
+            for token_data in result.get("data", []):
+                print(f"\nNetwork: {token_data.get('network')}")
+                print(f"Address: {token_data.get('address')}")
+                if token_data.get("error"):
+                    print(f"Error: {token_data.get('error')}")
+                else:
+                    prices = token_data.get("prices", [])
+                    for price in prices:
+                        print(f"Currency: {price.get('currency')}")
+                        print(f"Value: {price.get('value')}")
+                        print(f"Last Updated: {price.get('lastUpdatedAt')}")
+        else:
+            print(f"Error: HTTP {response.status_code} - {response.text}")
+
+    except Exception as e:
+        print(f"Exception: {str(e)}")
 
 
 if __name__ == "__main__":
@@ -78,3 +114,4 @@ if __name__ == "__main__":
     test_get_token_balances()
     test_get_allowance()
     test_get_token_metadata()
+    test_get_token_prices()
