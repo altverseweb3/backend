@@ -407,12 +407,15 @@ class CoinAggregator:
                 enriched_tokens = self.enrich_with_alchemy_metadata(chain_name, top_tokens)
                 top_tokens = enriched_tokens
             
+            # Remove Uneeded Fields
+            final_tokens = self.finalise_and_clean_up_tokens(top_tokens)
+
             # Save the data.json file
             data_path = os.path.join(self.base_dir, chain_name, 'data.json')
             with open(data_path, 'w', encoding='utf-8') as f:
-                json.dump(top_tokens, f, indent=2, ensure_ascii=False)
+                json.dump(final_tokens, f, indent=2, ensure_ascii=False)
                 
-            print(f"Saved data for {len(top_tokens)} tokens to {data_path}")
+            print(f"Saved data for {len(final_tokens)} tokens to {data_path}")
             
             # Add a shorter delay before processing the next chain
             if chain_name != list(self.chains.keys())[-1]:
@@ -482,16 +485,39 @@ class CoinAggregator:
             enriched_tokens = self.enrich_with_alchemy_metadata(chain_name, top_tokens)
             top_tokens = enriched_tokens
         
+        # Remove Uneeded Fields
+        final_tokens = self.finalise_and_clean_up_tokens(top_tokens)
+
         # Save the data.json file
         data_path = os.path.join(self.base_dir, chain_name, 'data.json')
         with open(data_path, 'w', encoding='utf-8') as f:
-            json.dump(top_tokens, f, indent=2, ensure_ascii=False)
+            json.dump(final_tokens, f, indent=2, ensure_ascii=False)
             
-        print(f"Saved data for {len(top_tokens)} tokens to {data_path}")
+        print(f"Saved data for {len(final_tokens)} tokens to {data_path}")
+
+    def finalise_and_clean_up_tokens(self, top_tokens):
+        
+        final_tokens = []
+        for coin in top_tokens:
+            print(f"Finalising data for {coin.get('name')} on {coin.get('chain')}")
+            alchemy_metadata = coin.get('alchemy_metadata', {}).copy()
+            alchemy_metadata.pop('logo', None)
+            coin_info = {
+            'extract_time': start_time,
+            'id': coin.get('id'),
+            'symbol': coin.get('symbol'),
+            'name': coin.get('name'),
+            'contract_address': coin.get('contract_address'),
+            'local_image': f"{coin.get('id')}.png",
+            'alchemy_metadata': alchemy_metadata
+            }
+            final_tokens.append(coin_info)
+        return final_tokens
 
 
 def main():
     try:
+        global start_time
         start_time = time.time()
         print("Starting CoinGecko data aggregation with Alchemy enrichment...")
         aggregator = CoinAggregator()
