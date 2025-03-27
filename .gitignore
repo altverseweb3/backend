@@ -2,6 +2,3 @@ lambda/lambda_function.zip
 
 # env files (can opt-in for committing if needed)
 .env*
-site/
-site/*
-site/**/*

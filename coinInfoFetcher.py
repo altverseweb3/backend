@@ -10,7 +10,7 @@ class CoinAggregator:
     def __init__(self):
         # Load environment variables from .env file
         load_dotenv()
-        dotenv_path = os.path.abspath(".env")
+        os.getenv()
         # Process all chains
         self.chains = {
             'ethereum': 'ethereum',
@@ -52,7 +52,7 @@ class CoinAggregator:
             print("Alchemy metadata enrichment will be skipped.")
         
         # Create output directory structure
-        self.base_dir = 'site/public/tokens'
+        self.base_dir = os.getcwd()
         os.makedirs(self.base_dir, exist_ok=True)
         
         for chain in self.chains:
@@ -72,7 +72,7 @@ class CoinAggregator:
             "x-cg-demo-api-key": "CG-6eGzLBYLkQfjCAXSbMaoka5B"
         }
 
-    def fetch_with_retry(self, url, params=None, max_retries=5):
+    def fetch_data_from_coin_gecko_with_retry(self, url, params=None, max_retries=5):
         """Fetch data from CoinGecko with a retry mechanism."""
         for i in range(max_retries):
             try:
@@ -215,7 +215,7 @@ class CoinAggregator:
     def fetch_coins_list_with_platforms(self):
         """Fetch the complete list of coins with platform details."""
         print("Fetching complete coin list with platform details...")
-        return self.fetch_with_retry(self.COINS_LIST_URL)
+        return self.fetch_data_from_coin_gecko_with_retry(self.COINS_LIST_URL)
 
     def fetch_all_coins_by_market_cap(self):
         """Fetch all available pages of coins sorted by market cap."""
@@ -233,7 +233,7 @@ class CoinAggregator:
                 'sparkline': False
             }
             
-            coins_page = self.fetch_with_retry(self.COINS_MARKETS_URL, params)
+            coins_page = self.fetch_data_from_coin_gecko_with_retry(self.COINS_MARKETS_URL, params)
             if not coins_page or len(coins_page) == 0:
                 print("No more coins returned from API - reached the end of available data")
                 break
