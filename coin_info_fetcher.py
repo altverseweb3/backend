@@ -10,7 +10,6 @@ class CoinAggregator:
     def __init__(self):
 
         load_dotenv()
-        os.getenv()
 
         self.chains = {
             'ethereum': 'ethereum',
@@ -42,7 +41,6 @@ class CoinAggregator:
         self.coingecko_wait = 2.0  # seconds between API calls (30 calls per minute)
         self.rate_limit_wait = 60  # seconds to wait after hitting rate limit
         
-        # Set rate limiting for Alchemy (30 calls per second)
         self.alchemy_wait = 0.05  # 50ms between calls (20 calls per second)
         
         self.alchemy_api_key = os.getenv('ALCHEMY_API_KEY')
