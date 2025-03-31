@@ -1,38 +1,191 @@
 import json
 import os
 import requests
+import boto3
+import time
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
+# Configure the DynamoDB client
+dynamodb = boto3.resource("dynamodb")
+rate_limit_table = dynamodb.Table(
+    os.environ.get("RATE_LIMIT_TABLE_NAME", "api_rate_limits")
+)
 
-# Expected event structure:
-# {
-#   "path": "/test" | "/balances" | "/allowance" | "/metadata" | "/prices",
-#   "httpMethod": "GET" | "POST" | "ANY" | "PUT",
-#   "body": "JSON string"
-# }
-def lambda_handler(event, context):
-    if event["path"] == "/test":
-        if event["httpMethod"] == "GET":
-            response_data = {"message": "Hello from altverse /test"}
-            return build_response(200, response_data)
+# Rate limit configuration
+RATE_LIMIT = 500  # Number of requests allowed in 5 minutes
+BUCKET_DURATION = 300  # 5 minutes in seconds
 
-    elif event["path"] == "/balances":
-        if event["httpMethod"] == "GET":
-            return handle_balances(event)
+def get_client_ip(event):
+    """Extract client IP address from Lambda event"""
+    # Try to get IP from API Gateway
+    if "requestContext" in event and "identity" in event["requestContext"]:
+        return event["requestContext"]["identity"].get("sourceIp", "unknown")
 
-    elif event["path"] == "/allowance":
-        if event["httpMethod"] == "GET":
-            return handle_allowance(event)
+    # If using ALB, check headers
+    headers = event.get("headers", {})
+    if headers and "X-Forwarded-For" in headers:
+        # X-Forwarded-For contains a comma-separated list of IPs
+        # The left-most IP address is the client
+        forwarded_for = headers["X-Forwarded-For"].split(",")
+        return forwarded_for[0].strip()
 
-    elif event["path"] == "/metadata":
-        if event["httpMethod"] == "GET":
-            return handle_metadata(event)
+    # Fallback
+    return "unknown"
 
-    elif event["path"] == "/prices":
-        if event["httpMethod"] == "GET":
-            return handle_prices(event)
+def check_rate_limits(ip_address):
+    
+    # Check if the IP address has exceeded rate limits
+    # Returns (is_allowed, bucket_info):
+    #   is_allowed: boolean indicating if the request should be allowed
+    #   bucket_info: dict with information about rate limit (if exceeded)
 
-    return build_response(404, {"error": "Not found"})
+    current_time = int(time.time())
 
+    try:
+        # Get current counts for this IP
+        response = rate_limit_table.get_item(Key={"ip_address": ip_address})
+
+        # If IP not found, we'll create it in update_rate_limits
+        if "Item" not in response:
+            # Store the IP with full credits
+            update_new_ip(ip_address, current_time)
+            return True, None
+
+        item = response["Item"]
+        
+        # Get remaining credits and first query timestamp
+        remaining_credits = int(item.get("credits", 0))
+        first_query_time = int(item.get("first_query_time", 0))
+        
+        # Check if 5 minutes have passed since first query
+        if current_time - first_query_time >= BUCKET_DURATION:
+            # 5 minutes have passed, replenish credits
+            replenish_credits(ip_address, current_time)
+            return True, None
+            
+        # Check if credits are exhausted
+        if remaining_credits <= 0:
+            # Calculate when credits will be replenished
+            reset_time = first_query_time + BUCKET_DURATION
+            return False, {
+                "limit": RATE_LIMIT,
+                "reset_time": reset_time,
+            }
+            
+        # Credits available, allow request
+        return True, None
+
+    except Exception as e:
+        # Log the error but allow the request to proceed to avoid blocking legitimate users
+        print(f"Error checking rate limits: {str(e)}")
+        return True, None
+
+def update_new_ip(ip_address, current_time):
+    
+    # Create a new entry for an IP address with full credits
+    try:
+        # Set TTL to expire at midnight (in UTC+0)
+        midnight = (datetime.now(datetime.timezone.utc) + timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        ttl_timestamp = int(midnight.timestamp())
+        
+        # Create new entry with full credits
+        rate_limit_table.put_item(
+            Item={
+                "ip_address": ip_address,
+                "credits": RATE_LIMIT - 1,  # Subtract 1 for this request
+                "first_query_time": current_time,
+                "ttl": ttl_timestamp
+            }
+        )
+    except Exception as e:
+        print(f"Error creating new IP entry: {str(e)}")
+
+def replenish_credits(ip_address, current_time):
+    
+    # Replenish credits for an IP address and update first query time
+    try:
+        # Set TTL to expire at midnight (in UTC+0)
+        midnight = (datetime.now(timezone.utc) + timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        ttl_timestamp = int(midnight.timestamp())
+        
+        # Update with replenished credits and new first query time
+        rate_limit_table.update_item(
+            Key={"ip_address": ip_address},
+            UpdateExpression="SET credits = :credits, first_query_time = :time, ttl = :ttl",
+            ExpressionAttributeValues={
+                ":credits": RATE_LIMIT - 1,  # Subtract 1 for this request
+                ":time": current_time,
+                ":ttl": ttl_timestamp
+            }
+        )
+    except Exception as e:
+        print(f"Error replenishing credits: {str(e)}")
+
+def update_rate_limits(ip_address):
+    
+    # Decrement the credits for the given IP address
+    try:
+        # Decrement credits by 1
+        rate_limit_table.update_item(
+            Key={"ip_address": ip_address},
+            UpdateExpression="SET credits = credits - :one",
+            ExpressionAttributeValues={":one": 1}
+        )
+    except Exception as e:
+        print(f"Error updating rate limits: {str(e)}")
+
+def build_rate_limit_response(bucket_info):
+    
+    # Build a 429 response with rate limit information
+    reset_time = datetime.fromtimestamp(bucket_info["reset_time"]).strftime(
+        "%Y-%m-%d %H:%M:%S UTC"
+    )
+    
+    seconds_remaining = bucket_info["reset_time"] - int(time.time())
+    # Return 429 if rate limited
+    return {
+        "statusCode": 429,
+        "headers": {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Methods": "ANY,OPTIONS,POST,GET",
+            "Content-Type": "application/json",
+        },
+        "body": json.dumps({
+            "error": "Too Many Requests",
+            "message": f"Rate limit exceeded. Limit is {bucket_info['limit']} requests per 5 minutes.",
+            "reset_at": reset_time,
+            "retry_after_seconds": max(0, seconds_remaining)
+        }),
+    }
+
+def rate_limit(event, context):
+    
+    # Extract client IP
+    ip_address = get_client_ip(event)
+    print("Extracted IP:", ip_address)
+
+    # Skip rate limiting for unknown IPs (optional - you may want to block these instead)
+    if ip_address == "unknown":
+        return
+
+    # Check if IP is within rate limits
+    is_allowed, bucket_info = check_rate_limits(ip_address)
+
+    if not is_allowed:
+        # Return 429 Too Many Requests
+        return build_rate_limit_response(bucket_info)
+
+    # If this is an existing IP with available credits, update credits
+    if bucket_info is None:
+        update_rate_limits(ip_address)
+
+    return
 
 # Expected event structure for /balances:
 # {
@@ -325,3 +478,34 @@ def build_response(status_code, body):
         },
         "body": json.dumps(body),
     }
+
+# Lambda handler code 
+def lambda_handler(event, context):
+    res = rate_limit(event, context)
+    if res:
+        return res
+
+    # Rest of your API handling code
+    if event["path"] == "/test":
+        if event["httpMethod"] == "GET":
+            response_data = {"message": "Hello from altverse /test"}
+            return build_response(200, response_data)
+
+    elif event["path"] == "/balances":
+        if event["httpMethod"] == "GET":
+            return handle_balances(event)
+
+    elif event["path"] == "/allowance":
+        if event["httpMethod"] == "GET":
+            return handle_allowance(event)
+
+    elif event["path"] == "/metadata":
+        if event["httpMethod"] == "GET":
+            return handle_metadata(event)
+
+    elif event["path"] == "/prices":
+        if event["httpMethod"] == "GET":
+            return handle_prices(event)
+
+    return build_response(404, {"error": "Not found"})
+
