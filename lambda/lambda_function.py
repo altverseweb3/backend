@@ -29,7 +29,7 @@ def get_client_ip(event):
         return headers["X-Forwarded-For"].split(",")[0].strip()
     return "unknown"
 
-
+# Check for daily Reset IP credits
 def check_daily_reset():
     """
     Check if a new day has begun.
@@ -57,7 +57,7 @@ def check_daily_reset():
         print(f"Error in check_daily_reset: {str(e)}")
     return False
 
-
+# Perform reset of credits
 def perform_daily_reset(current_time):
     """
     Purge all IP records (except the daily reset tracker) from the DynamoDB table.
@@ -78,11 +78,9 @@ def perform_daily_reset(current_time):
     except Exception as e:
         print(f"Error in perform_daily_reset: {str(e)}")
 
-
+# Check the rate limits for an IP address.
 def check_rate_limits(ip_address):
     """
-    Check the rate limits for an IP address.
-    
     SIMPLE TIME-BASED RULE:
     - IF current time - last_replenish_time >= BUCKET_DURATION (300 seconds),
       THEN completely reset the IP data with 500 fresh credits and a new timestamp.
@@ -160,10 +158,9 @@ def check_rate_limits(ip_address):
         # Allow the request if there's an error checking limits
         return True, None
 
-
+#Create a new record for an IP address.
 def update_new_ip(ip_address, current_time):
     """
-    Create a new record for an IP address.
     Sets credits to RATE_LIMIT - 1 (deducting one for the current request)
     and sets 'last_replenish_time' to the current time.
     """
@@ -235,10 +232,9 @@ def build_rate_limit_response(bucket_info):
         }),
     }
 
-
+# Main rate-limit handler
 def rate_limit(event, context):
     """
-    Main rate-limit handler with clean, simple logic:
     1. Check for daily reset
     2. Check rate limits - if time has passed, completely reset the record
     3. If allowed, subtract one token; otherwise, return a 429 response
