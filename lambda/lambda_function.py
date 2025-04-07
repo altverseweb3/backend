@@ -1,37 +1,295 @@
 import json
 import os
 import requests
+import boto3
+import time
+from botocore.exceptions import ClientError
+from datetime import datetime, timedelta, timezone
+
+# Configure the DynamoDB client
+dynamodb = boto3.resource("dynamodb")
+rate_limit_table = dynamodb.Table(
+    os.environ.get("RATE_LIMIT_TABLE_NAME", "api_rate_limits")
+)
+
+# Rate limit configuration
+RATE_LIMIT = 500  # Number of requests allowed in 5 minutes
+BUCKET_DURATION = 300  # 5 minutes in seconds
+
+# Special key for tracking the last database reset
+RESET_TRACKER_KEY = "daily_reset_tracker"
+
+def get_client_ip(event):
+    """Extract client IP address from Lambda event."""
+    if "requestContext" in event and "identity" in event["requestContext"]:
+        return event["requestContext"]["identity"].get("sourceIp", "unknown")
+    headers = event.get("headers", {})
+    if headers and "X-Forwarded-For" in headers:
+        # X-Forwarded-For may have a list; we take the first
+        return headers["X-Forwarded-For"].split(",")[0].strip()
+    return "unknown"
 
 
-# Expected event structure:
-# {
-#   "path": "/test" | "/balances" | "/allowance" | "/metadata" | "/prices",
-#   "httpMethod": "GET" | "POST" | "ANY" | "PUT",
-#   "body": "JSON string"
-# }
-def lambda_handler(event, context):
-    if event["path"] == "/test":
-        if event["httpMethod"] == "GET":
-            response_data = {"message": "Hello from altverse /test"}
-            return build_response(200, response_data)
+def check_daily_reset():
+    """
+    Check if a new day has begun.
+    If so, purge the entire DynamoDB table (except for the tracker) and update the tracker.
+    """
+    current_time = int(time.time())
+    current_date = datetime.fromtimestamp(current_time, tz=timezone.utc).date()
+    try:
+        response = rate_limit_table.get_item(Key={"ip_address": RESET_TRACKER_KEY})
+        if "Item" in response:
+            last_reset_time = int(response["Item"].get("last_reset_time", 0))
+            last_reset_date = datetime.fromtimestamp(last_reset_time, tz=timezone.utc).date()
+            if current_date > last_reset_date:
+                perform_daily_reset(current_time)
+                return True
+        else:
+            # If no tracker exists, create one.
+            rate_limit_table.put_item(
+                Item={
+                    "ip_address": RESET_TRACKER_KEY,
+                    "last_reset_time": current_time
+                }
+            )
+    except Exception as e:
+        print(f"Error in check_daily_reset: {str(e)}")
+    return False
 
-    elif event["path"] == "/balances":
-        if event["httpMethod"] == "GET":
-            return handle_balances(event)
 
-    elif event["path"] == "/allowance":
-        if event["httpMethod"] == "GET":
-            return handle_allowance(event)
+def perform_daily_reset(current_time):
+    """
+    Purge all IP records (except the daily reset tracker) from the DynamoDB table.
+    """
+    try:
+        response = rate_limit_table.scan(ProjectionExpression="ip_address")
+        with rate_limit_table.batch_writer() as batch:
+            for item in response.get("Items", []):
+                ip = item.get("ip_address")
+                if ip != RESET_TRACKER_KEY:
+                    batch.delete_item(Key={"ip_address": ip})
+        rate_limit_table.update_item(
+            Key={"ip_address": RESET_TRACKER_KEY},
+            UpdateExpression="SET last_reset_time = :time",
+            ExpressionAttributeValues={":time": current_time}
+        )
+        print("Daily reset completed successfully.")
+    except Exception as e:
+        print(f"Error in perform_daily_reset: {str(e)}")
 
-    elif event["path"] == "/metadata":
-        if event["httpMethod"] == "GET":
-            return handle_metadata(event)
 
-    elif event["path"] == "/prices":
-        if event["httpMethod"] == "GET":
-            return handle_prices(event)
+def check_rate_limits(ip_address):
+    """
+    Check the rate limits for an IP address.
+    
+    SIMPLE TIME-BASED RULE:
+    - IF current time - last_replenish_time >= BUCKET_DURATION (300 seconds),
+      THEN completely reset the IP data with 500 fresh credits and a new timestamp.
+    - IF credits <= 0 THEN return a 429 response.
+    """
+    current_time = int(time.time())
+    print(f"Rate limit check for {ip_address} at time {current_time}")
+    
+    try:
+        # Use a consistent read to ensure up-to-date data
+        response = rate_limit_table.get_item(
+            Key={"ip_address": ip_address}, ConsistentRead=True
+        )
+        
+        if "Item" not in response:
+            # New IP: create a new record with full credits
+            print(f"New IP: {ip_address} - Creating new record")
+            update_new_ip(ip_address, current_time)
+            return True, None
 
-    return build_response(404, {"error": "Not found"})
+        # Get the current credit count and last replenishment time
+        item = response["Item"]
+        credits = int(item.get("credits", 0))
+        last_replenish_time = int(item.get("last_replenish_time", 0))
+        time_since_last_replenish = current_time - last_replenish_time
+        
+        print(f"IP: {ip_address}, Credits: {credits}, Last replenish: {last_replenish_time}, Time since: {time_since_last_replenish}s")
+        
+        # TIME-BASED RULE:
+        # If the bucket duration has passed, completely reset the record
+        if time_since_last_replenish >= BUCKET_DURATION:
+            print(f"Time passed: Completely resetting record for {ip_address} after {time_since_last_replenish}s")
+            
+            # Set the TTL for tomorrow midnight
+            midnight = (datetime.now(timezone.utc) + timedelta(days=1)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            ttl_timestamp = int(midnight.timestamp())
+            
+            # IMPORTANT: Use put_item to completely replace the record
+            # This ensures we don't have any leftover values from the previous record
+            rate_limit_table.put_item(
+                Item={
+                    "ip_address": ip_address,
+                    "credits": RATE_LIMIT,
+                    "last_replenish_time": current_time,
+                    "ttl": ttl_timestamp
+                }
+            )
+            
+            # Since we completely reset the record, update our local variables
+            credits = RATE_LIMIT
+            last_replenish_time = current_time
+            
+            print(f"Replenishment complete: {ip_address} now has {credits} credits, new timestamp: {last_replenish_time}")
+        
+        # After all the checks, if credits are 0 or negative, block the request
+        if credits <= 0:
+            reset_time = last_replenish_time + BUCKET_DURATION
+            time_until_reset = max(0, reset_time - current_time)
+            
+            print(f"Rate limited: {ip_address} has no credits. Reset in {time_until_reset}s at {reset_time}")
+            
+            return False, {
+                "limit": RATE_LIMIT,
+                "reset_time": reset_time,
+                "ip_address": ip_address
+            }
+        
+        # If we reach here, there are credits available
+        return True, None
+
+    except Exception as e:
+        print(f"Error in check_rate_limits: {str(e)}")
+        # Allow the request if there's an error checking limits
+        return True, None
+
+
+def update_new_ip(ip_address, current_time):
+    """
+    Create a new record for an IP address.
+    Sets credits to RATE_LIMIT - 1 (deducting one for the current request)
+    and sets 'last_replenish_time' to the current time.
+    """
+    midnight = (datetime.now(timezone.utc) + timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    ttl_timestamp = int(midnight.timestamp())
+    
+    # Use put_item to ensure a clean record - this will completely replace any existing item
+    rate_limit_table.put_item(
+        Item={
+            "ip_address": ip_address,
+            "credits": RATE_LIMIT - 1,  # Start with one credit already used for this request
+            "last_replenish_time": current_time,
+            "ttl": ttl_timestamp
+        }
+    )
+    print(f"Created new record for {ip_address} with {RATE_LIMIT - 1} credits and timestamp {current_time}")
+
+
+def build_rate_limit_response(bucket_info):
+    """
+    Build a 429 response with rate limit information.
+    """
+    current_time = int(time.time())
+    reset_time = bucket_info["reset_time"]
+    reset_time_str = datetime.fromtimestamp(reset_time).strftime("%Y-%m-%d %H:%M:%S UTC")
+    seconds_remaining = max(0, reset_time - current_time)
+    
+    # Fail-safe: If reset time has already passed, reset the record and allow the request
+    if current_time > reset_time:
+        ip_address = bucket_info.get("ip_address", "unknown")
+        if ip_address != "unknown":
+            print(f"Failsafe: Reset time ({reset_time}) has passed current time ({current_time}). Resetting record.")
+            
+            # This is a sanity check - if the time has passed, 
+            # completely reset the record and allow the request
+            midnight = (datetime.now(timezone.utc) + timedelta(days=1)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            ttl_timestamp = int(midnight.timestamp())
+            
+            # Completely replace the record
+            rate_limit_table.put_item(
+                Item={
+                    "ip_address": ip_address,
+                    "credits": RATE_LIMIT,
+                    "last_replenish_time": current_time,
+                    "ttl": ttl_timestamp
+                }
+            )
+            print(f"Record reset for {ip_address} - allowing request")
+            return None  # Return None to signal that the request should be allowed
+    
+    # Normal case: return 429 response
+    return {
+        "statusCode": 429,
+        "headers": {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Methods": "ANY,OPTIONS,POST,GET",
+            "Content-Type": "application/json",
+        },
+        "body": json.dumps({
+            "error": "Too Many Requests",
+            "message": f"Rate limit exceeded. Limit is {bucket_info['limit']} requests per {BUCKET_DURATION} seconds.",
+            "reset_at": reset_time_str,
+            "retry_after_seconds": seconds_remaining
+        }),
+    }
+
+
+def rate_limit(event, context):
+    """
+    Main rate-limit handler with clean, simple logic:
+    1. Check for daily reset
+    2. Check rate limits - if time has passed, completely reset the record
+    3. If allowed, subtract one token; otherwise, return a 429 response
+    """
+    # Check for daily database reset first
+    check_daily_reset()
+    
+    # Get the client IP
+    ip_address = get_client_ip(event)
+    if ip_address == "unknown":
+        return
+    
+    # SIMPLE FLOW:
+    # 1. Check if rate limits allow this request
+    allowed, bucket_info = check_rate_limits(ip_address)
+    
+    # 2. If not allowed (credits are 0), return 429 rate limit response
+    if not allowed:
+        print(f"Rate limit triggered for {ip_address}")
+        return build_rate_limit_response(bucket_info)
+    
+    # 3. Decrement one credit for this request
+    try:
+        response = rate_limit_table.update_item(
+            Key={"ip_address": ip_address},
+            UpdateExpression="SET credits = credits - :one",
+            ConditionExpression="credits > :zero",
+            ExpressionAttributeValues={":one": 1, ":zero": 0},
+            ReturnValues="UPDATED_NEW"
+        )
+        
+        if "Attributes" in response:
+            new_credits = int(response["Attributes"].get("credits", 0))
+            print(f"Credit used: {ip_address} now has {new_credits} credits remaining")
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            # This means credits would go negative - return 429 response
+            print(f"Condition check failed for {ip_address} - no credits available")
+            
+            # Get the current record to build the rate limit response
+            item = rate_limit_table.get_item(Key={"ip_address": ip_address}).get("Item", {})
+            last_replenish_time = int(item.get("last_replenish_time", 0))
+            reset_time = last_replenish_time + BUCKET_DURATION
+            
+            bucket_info = {"limit": RATE_LIMIT, "reset_time": reset_time, "ip_address": ip_address}
+            return build_rate_limit_response(bucket_info)
+        else:
+            print(f"Error in update_rate_limits: {str(e)}")
+    
+    # 4. If we reach here, the request is allowed
+    return
 
 
 # Expected event structure for /balances:
@@ -325,3 +583,38 @@ def build_response(status_code, body):
         },
         "body": json.dumps(body),
     }
+
+# Expected event structure:
+# {
+#   "path": "/test" | "/balances" | "/allowance" | "/metadata" | "/prices",
+#   "httpMethod": "GET" | "POST" | "ANY" | "PUT",
+#   "body": "JSON string"
+# }
+def lambda_handler(event, context):
+    res = rate_limit(event, context)
+    if res:
+        return res
+
+    # Rest of your API handling code
+    if event["path"] == "/test":
+        if event["httpMethod"] == "GET":
+            response_data = {"message": "Hello from altverse /test"}
+            return build_response(200, response_data)
+
+    elif event["path"] == "/balances":
+        if event["httpMethod"] == "GET":
+            return handle_balances(event)
+
+    elif event["path"] == "/allowance":
+        if event["httpMethod"] == "GET":
+            return handle_allowance(event)
+
+    elif event["path"] == "/metadata":
+        if event["httpMethod"] == "GET":
+            return handle_metadata(event)
+
+    elif event["path"] == "/prices":
+        if event["httpMethod"] == "GET":
+            return handle_prices(event)
+
+    return build_response(404, {"error": "Not found"})
