@@ -598,19 +598,19 @@ def lambda_handler(event, context):
             return build_response(200, response_data)
 
     elif event["path"] == "/balances":
-        if event["httpMethod"] == "GET":
+        if event["httpMethod"] == "POST":
             return handle_balances(event)
 
     elif event["path"] == "/allowance":
-        if event["httpMethod"] == "GET":
+        if event["httpMethod"] == "POST":
             return handle_allowance(event)
 
     elif event["path"] == "/metadata":
-        if event["httpMethod"] == "GET":
+        if event["httpMethod"] == "POST":
             return handle_metadata(event)
 
     elif event["path"] == "/prices":
-        if event["httpMethod"] == "GET":
+        if event["httpMethod"] == "POST":
             return handle_prices(event)
 
     return build_response(404, {"error": "Not found"})
