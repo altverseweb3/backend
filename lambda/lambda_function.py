@@ -573,11 +573,12 @@ def build_response(status_code, body):
         "statusCode": status_code,
         "headers": {
             "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Headers": "**",
             "Access-Control-Allow-Methods": "ANY,OPTIONS,POST,GET",
             "Content-Type": "application/json",
         },
-        "body": json.dumps(body),
+        "body": json.dumps(body).encode("utf-8"),
+        "isBase64Encoded": True 
     }
 
 # Expected event structure:
@@ -587,29 +588,35 @@ def build_response(status_code, body):
 #   "body": "JSON string"
 # }
 def lambda_handler(event, context):
+    print("Event:", json.dumps(event))
+
     res = rate_limit(event, context)
     if res:
         return res
+    
+    path = event.get("path", "")
 
-    # Rest of your API handling code
-    if event["path"] == "/test":
+    if not path and "requestContext" in event and "resourcePath" in event["requestContext"]:
+        path = event["requestContext"]["resourcePath"]
+
+    if path == "/test" or path.endswith("/test"):
         if event["httpMethod"] == "GET":
             response_data = {"message": "Hello from altverse /test"}
             return build_response(200, response_data)
 
-    elif event["path"] == "/balances":
+    elif path == "/balances" or path.endswith("/balances"):
         if event["httpMethod"] == "POST":
             return handle_balances(event)
 
-    elif event["path"] == "/allowance":
+    elif path == "/allowance" or path.endswith("/allowance"):
         if event["httpMethod"] == "POST":
             return handle_allowance(event)
 
-    elif event["path"] == "/metadata":
+    elif path == "/metadata" or path.endswith("/metadata"):
         if event["httpMethod"] == "POST":
             return handle_metadata(event)
 
-    elif event["path"] == "/prices":
+    elif path == "/prices" or path.endswith("/prices"):
         if event["httpMethod"] == "POST":
             return handle_prices(event)
 
