@@ -348,6 +348,31 @@ def handle_balances(event):
         )
 
     try:
+        formatted_balances = []
+        
+        # Get native token balance
+        native_params = [user_address, "latest"]
+        native_response = call_alchemy(network, "eth_getBalance", native_params)
+
+        if "result" in native_response:
+            native_balance = native_response["result"]
+            
+            # Pad the native balance to match ERC20 token format (32 bytes)
+            # First, remove '0x' prefix, then pad to 64 characters (32 bytes), then add '0x' back
+            if native_balance.startswith('0x'):
+                padded_balance = '0x' + native_balance[2:].zfill(64)
+            else:
+                padded_balance = '0x' + native_balance.zfill(64)
+                
+            native_token_info = {
+                "contractAddress": "0x0000000000000000000000000000000000000000",  # Zero address for native token
+                "tokenBalance": padded_balance
+            }
+            formatted_balances.append(native_token_info)
+        else:
+            print(f"Failed to retrieve native token balance: {native_response}")
+
+        # Get ERC20 token balances
         params = [user_address]
         if contract_addresses:
             if "," in contract_addresses:
@@ -358,14 +383,20 @@ def handle_balances(event):
         alchemy_response = call_alchemy(network, "alchemy_getTokenBalances", params)
 
         if "result" not in alchemy_response:
+            # If we have at least the native token balance, return that
+            if formatted_balances:
+                return build_response(200, formatted_balances)
             return build_response(
                 500, {"error": "Failed to retrieve data from Alchemy API"}
             )
 
         token_balances = alchemy_response["result"]["tokenBalances"]
-        formatted_balances = []
 
         for balance in token_balances:
+            # Skip tokens with zero balance if they're in the "0x" format
+            if balance["tokenBalance"] == "0x0":
+                continue
+                
             token_info = {
                 "contractAddress": balance["contractAddress"],
                 "tokenBalance": balance["tokenBalance"],
