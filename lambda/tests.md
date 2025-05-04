@@ -1,6 +1,6 @@
 # AWS Lambda Test Events
 
-These test events can be used to test the Lambda function that interfaces with the Alchemy API to retrieve blockchain data.
+These test events can be used to test the Lambda function that interfaces with the Alchemy API and BlockPI (for Sui) to retrieve blockchain data.
 
 ## 1. Test Endpoint
 ```json
@@ -56,7 +56,7 @@ These test events can be used to test the Lambda function that interfaces with t
 }
 ```
 
-## 8. Error Case - Invalid JSON for /metadata
+## 7. Error Case - Invalid JSON for /metadata
 ```json
 {
   "path": "/metadata",
@@ -65,7 +65,7 @@ These test events can be used to test the Lambda function that interfaces with t
 }
 ```
 
-## 9. Error Case - Path Not Found
+## 8. Error Case - Path Not Found
 ```json
 {
   "path": "/invalid-path",
@@ -74,7 +74,7 @@ These test events can be used to test the Lambda function that interfaces with t
 }
 ```
 
-## 10. Error Case - Invalid HTTP Method
+## 9. Error Case - Invalid HTTP Method
 ```json
 {
   "path": "/balances",
@@ -83,7 +83,7 @@ These test events can be used to test the Lambda function that interfaces with t
 }
 ```
 
-## 11. Error Case - Malformed Request in Prices Endpoint
+## 10. Error Case - Malformed Request in Prices Endpoint
 ```json
 {
   "path": "/prices",
@@ -92,7 +92,7 @@ These test events can be used to test the Lambda function that interfaces with t
 }
 ```
 
-## 12. SPL Token Balances Test
+## 11. SPL Token Balances Test
 ```json
 {
   "path": "/spl-balances",
@@ -101,7 +101,7 @@ These test events can be used to test the Lambda function that interfaces with t
 }
 ```
 
-## 13. SPL Token Balances with programId Filter Test
+## 12. SPL Token Balances with programId Filter Test
 ```json
 {
   "path": "/spl-balances",
@@ -110,7 +110,7 @@ These test events can be used to test the Lambda function that interfaces with t
 }
 ```
 
-## 14. SPL Token Balances with mint Filter Test
+## 13. SPL Token Balances with mint Filter Test
 ```json
 {
   "path": "/spl-balances",
@@ -119,12 +119,111 @@ These test events can be used to test the Lambda function that interfaces with t
 }
 ```
 
-## 15. Error Case - Missing Parameters for /spl-balances
+## 14. Error Case - Missing Parameters for /spl-balances
 ```json
 {
   "path": "/spl-balances",
   "httpMethod": "POST",
   "body": "{\"network\": \"solana-mainnet\"}"
+}
+```
+
+## 15. Sui Coin Metadata Test
+```json
+{
+  "path": "/sui/coin-metadata",
+  "httpMethod": "POST",
+  "body": "{\"coinType\": \"0x2::sui::SUI\"}"
+}
+```
+
+## 16. Sui Balance Test
+```json
+{
+  "path": "/sui/balance",
+  "httpMethod": "POST",
+  "body": "{\"owner\": \"0x89b9c69e9fb7ded0b84e4c22071f6d7fdfcf049c94c625c9c45699c89ea1f3ce\"}"
+}
+```
+
+## 17. Sui Balance with Specific Coin Type Test
+```json
+{
+  "path": "/sui/balance",
+  "httpMethod": "POST",
+  "body": "{\"owner\": \"0x89b9c69e9fb7ded0b84e4c22071f6d7fdfcf049c94c625c9c45699c89ea1f3ce\", \"coinType\": \"0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN\"}"
+}
+```
+
+## 18. Sui All Coins Test
+```json
+{
+  "path": "/sui/all-coins",
+  "httpMethod": "POST",
+  "body": "{\"owner\": \"0x89b9c69e9fb7ded0b84e4c22071f6d7fdfcf049c94c625c9c45699c89ea1f3ce\"}"
+}
+```
+
+## 19. Sui All Coins with Pagination Test
+```json
+{
+  "path": "/sui/all-coins",
+  "httpMethod": "POST",
+  "body": "{\"owner\": \"0x89b9c69e9fb7ded0b84e4c22071f6d7fdfcf049c94c625c9c45699c89ea1f3ce\", \"limit\": 5}"
+}
+```
+
+## 20. Sui All Balances Test
+```json
+{
+  "path": "/sui/all-balances",
+  "httpMethod": "POST",
+  "body": "{\"owner\": \"0x89b9c69e9fb7ded0b84e4c22071f6d7fdfcf049c94c625c9c45699c89ea1f3ce\"}"
+}
+```
+
+## 21. Sui Coins Test
+```json
+{
+  "path": "/sui/coins",
+  "httpMethod": "POST",
+  "body": "{\"owner\": \"0x89b9c69e9fb7ded0b84e4c22071f6d7fdfcf049c94c625c9c45699c89ea1f3ce\"}"
+}
+```
+
+## 22. Sui Coins with Specific Coin Type Test
+```json
+{
+  "path": "/sui/coins",
+  "httpMethod": "POST",
+  "body": "{\"owner\": \"0x89b9c69e9fb7ded0b84e4c22071f6d7fdfcf049c94c625c9c45699c89ea1f3ce\", \"coinType\": \"0x2::sui::SUI\"}"
+}
+```
+
+## 23. Sui Coins with Pagination Test
+```json
+{
+  "path": "/sui/coins",
+  "httpMethod": "POST",
+  "body": "{\"owner\": \"0x89b9c69e9fb7ded0b84e4c22071f6d7fdfcf049c94c625c9c45699c89ea1f3ce\", \"coinType\": \"0x2::sui::SUI\", \"limit\": 10}"
+}
+```
+
+## 24. Error Case - Missing Owner Parameter for Sui Endpoints
+```json
+{
+  "path": "/sui/balance",
+  "httpMethod": "POST",
+  "body": "{}"
+}
+```
+
+## 25. Error Case - Missing CoinType Parameter for Sui Coin Metadata
+```json
+{
+  "path": "/sui/coin-metadata",
+  "httpMethod": "POST",
+  "body": "{}"
 }
 ```
 
@@ -137,3 +236,6 @@ These test events can be used to test the Lambda function that interfaces with t
 - Uniswap Router: `0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D`
 - Solana sample address: `J27ma1MPBRvmPJxLqBqQGNECMXDm9L6abFa4duKiPosa`
 - SPL Token Program ID: `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`
+- Sui sample address: `0x89b9c69e9fb7ded0b84e4c22071f6d7fdfcf049c94c625c9c45699c89ea1f3ce`
+- Sui native coin type: `0x2::sui::SUI`
+- Example Sui token: `0x5d4b302506645c37ff133b98c4b50a5ae14841659738d6d733d59d0d217a93bf::coin::COIN`

@@ -722,6 +722,290 @@ def handle_spl_balances(event):
         return build_response(500, {"error": f"An error occurred: {str(e)}"})
 
 
+# Expected event structure for /sui/coin-metadata:
+# {
+#   "body": {
+#     "coinType": "string" // Required: Type name for the coin (e.g., "0x2::sui::SUI")
+#   }
+# }
+# Response structure:
+# {
+#   "decimals": number, // Number of decimal places the coin uses
+#   "name": "string", // Name for the token
+#   "symbol": "string", // Symbol for the token
+#   "description": "string", // Description of the token
+#   "iconUrl": string | null, // URL for the token logo
+#   "id": string | null // Object id for the CoinMetadata object
+# }
+def handle_sui_coin_metadata(event):
+    try:
+        body = json.loads(event.get("body", "{}"))
+    except json.JSONDecodeError:
+        return build_response(400, {"error": "Invalid JSON body"})
+
+    coin_type = body.get("coinType")
+
+    if not coin_type:
+        return build_response(400, {"error": "Missing required parameter: coinType"})
+
+    try:
+        params = [coin_type]
+        sui_response = call_sui_api("suix_getCoinMetadata", params)
+
+        if "error" in sui_response:
+            return build_response(
+                500, {"error": f"Sui API error: {sui_response['error']['message']}"}
+            )
+
+        if "result" not in sui_response:
+            return build_response(
+                500, {"error": "Failed to retrieve coin metadata from Sui API"}
+            )
+
+        return build_response(200, sui_response["result"])
+
+    except Exception as e:
+        return build_response(500, {"error": f"An error occurred: {str(e)}"})
+
+
+# Expected event structure for /sui/balance:
+# {
+#   "body": {
+#     "owner": "string", // Required: The owner's Sui address
+#     "coinType": "string" // Optional: Type name for the coin (default to "0x2::sui::SUI")
+#   }
+# }
+# Response structure:
+# {
+#   "coinType": "string", // Type name for the coin
+#   "coinObjectCount": number, // Number of coin objects of this type
+#   "totalBalance": "string", // Total balance as a string
+#   "lockedBalance": object // Information about locked balance
+# }
+def handle_sui_balance(event):
+    try:
+        body = json.loads(event.get("body", "{}"))
+    except json.JSONDecodeError:
+        return build_response(400, {"error": "Invalid JSON body"})
+
+    owner = body.get("owner")
+    coin_type = body.get("coinType")  # Optional
+
+    if not owner:
+        return build_response(400, {"error": "Missing required parameter: owner"})
+
+    try:
+        params = [owner]
+        if coin_type:
+            params.append(coin_type)
+
+        sui_response = call_sui_api("suix_getBalance", params)
+
+        if "error" in sui_response:
+            return build_response(
+                500, {"error": f"Sui API error: {sui_response['error']['message']}"}
+            )
+
+        if "result" not in sui_response:
+            return build_response(
+                500, {"error": "Failed to retrieve balance from Sui API"}
+            )
+
+        return build_response(200, sui_response["result"])
+
+    except Exception as e:
+        return build_response(500, {"error": f"An error occurred: {str(e)}"})
+
+
+# Expected event structure for /sui/all-coins:
+# {
+#   "body": {
+#     "owner": "string", // Required: The owner's Sui address
+#     "cursor": "string", // Optional: Paging cursor
+#     "limit": number // Optional: Maximum number of items per page
+#   }
+# }
+# Response structure:
+# {
+#   "data": [ // Array of coin objects
+#     {
+#       "coinType": "string", // Type name for the coin
+#       "coinObjectId": "string", // Object ID of the coin
+#       "version": "string", // Object version
+#       "digest": "string", // Object digest
+#       "balance": "string", // Coin balance
+#       "previousTransaction": "string" // Previous transaction digest
+#     }
+#   ],
+#   "nextCursor": string | null, // Cursor for pagination, or null if no more pages
+#   "hasNextPage": boolean // Whether there are more pages to fetch
+# }
+def handle_sui_all_coins(event):
+    try:
+        body = json.loads(event.get("body", "{}"))
+    except json.JSONDecodeError:
+        return build_response(400, {"error": "Invalid JSON body"})
+
+    owner = body.get("owner")
+    cursor = body.get("cursor")  # Optional
+    limit = body.get("limit")  # Optional
+
+    if not owner:
+        return build_response(400, {"error": "Missing required parameter: owner"})
+
+    try:
+        params = [owner]
+        if cursor:
+            params.append(cursor)
+            if limit:
+                params.append(limit)
+        elif limit:
+            params.append(None)  # Add empty cursor if only limit is provided
+            params.append(limit)
+
+        sui_response = call_sui_api("suix_getAllCoins", params)
+
+        if "error" in sui_response:
+            return build_response(
+                500, {"error": f"Sui API error: {sui_response['error']['message']}"}
+            )
+
+        if "result" not in sui_response:
+            return build_response(
+                500, {"error": "Failed to retrieve all coins from Sui API"}
+            )
+
+        return build_response(200, sui_response["result"])
+
+    except Exception as e:
+        return build_response(500, {"error": f"An error occurred: {str(e)}"})
+
+
+# Expected event structure for /sui/all-balances:
+# {
+#   "body": {
+#     "owner": "string" // Required: The owner's Sui address
+#   }
+# }
+# Response structure:
+# [
+#   {
+#     "coinType": "string", // Type name for the coin
+#     "coinObjectCount": number, // Number of coin objects of this type
+#     "totalBalance": "string", // Total balance as a string
+#     "lockedBalance": object // Information about locked balance
+#   }
+# ]
+def handle_sui_all_balances(event):
+    try:
+        body = json.loads(event.get("body", "{}"))
+    except json.JSONDecodeError:
+        return build_response(400, {"error": "Invalid JSON body"})
+
+    owner = body.get("owner")
+
+    if not owner:
+        return build_response(400, {"error": "Missing required parameter: owner"})
+
+    try:
+        params = [owner]
+        sui_response = call_sui_api("suix_getAllBalances", params)
+
+        if "error" in sui_response:
+            return build_response(
+                500, {"error": f"Sui API error: {sui_response['error']['message']}"}
+            )
+
+        if "result" not in sui_response:
+            return build_response(
+                500, {"error": "Failed to retrieve all balances from Sui API"}
+            )
+
+        return build_response(200, sui_response["result"])
+
+    except Exception as e:
+        return build_response(500, {"error": f"An error occurred: {str(e)}"})
+
+
+# Expected event structure for /sui/coins:
+# {
+#   "body": {
+#     "owner": "string", // Required: The owner's Sui address
+#     "coinType": "string", // Optional: Type name for the coin
+#     "cursor": "string", // Optional: Paging cursor
+#     "limit": number // Optional: Maximum number of items per page
+#   }
+# }
+# Response structure:
+# {
+#   "data": [ // Array of coin objects
+#     {
+#       "coinType": "string", // Type name for the coin
+#       "coinObjectId": "string", // Object ID of the coin
+#       "version": "string", // Object version
+#       "digest": "string", // Object digest
+#       "balance": "string", // Coin balance
+#       "previousTransaction": "string" // Previous transaction digest
+#     }
+#   ],
+#   "nextCursor": string | null, // Cursor for pagination, or null if no more pages
+#   "hasNextPage": boolean // Whether there are more pages to fetch
+# }
+def handle_sui_coins(event):
+    try:
+        body = json.loads(event.get("body", "{}"))
+    except json.JSONDecodeError:
+        return build_response(400, {"error": "Invalid JSON body"})
+
+    owner = body.get("owner")
+    coin_type = body.get("coinType")  # Optional
+    cursor = body.get("cursor")  # Optional
+    limit = body.get("limit")  # Optional
+
+    if not owner:
+        return build_response(400, {"error": "Missing required parameter: owner"})
+
+    try:
+        params = [owner]
+
+        # Add optional parameters in order
+        if coin_type:
+            params.append(coin_type)
+            if cursor:
+                params.append(cursor)
+                if limit:
+                    params.append(limit)
+            elif limit:
+                params.append(None)  # Add empty cursor if only limit is provided
+                params.append(limit)
+        elif cursor:
+            params.append(None)  # Add default coinType if not provided
+            params.append(cursor)
+            if limit:
+                params.append(limit)
+        elif limit:
+            params.append(None)  # Add default coinType if not provided
+            params.append(None)  # Add empty cursor if only limit is provided
+            params.append(limit)
+
+        sui_response = call_sui_api("suix_getCoins", params)
+
+        if "error" in sui_response:
+            return build_response(
+                500, {"error": f"Sui API error: {sui_response['error']['message']}"}
+            )
+
+        if "result" not in sui_response:
+            return build_response(
+                500, {"error": "Failed to retrieve coins from Sui API"}
+            )
+
+        return build_response(200, sui_response["result"])
+
+    except Exception as e:
+        return build_response(500, {"error": f"An error occurred: {str(e)}"})
+
+
 # Expected parameters:
 # - network: String, e.g., "eth-mainnet", "polygon-mainnet"
 # - method: String, Alchemy API method name
@@ -736,6 +1020,24 @@ def call_alchemy(network, method, params):
     api_key = os.environ.get("ALCHEMY_API_KEY")
     url = f"https://{network}.g.alchemy.com/v2/{api_key}"
 
+    payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+
+    response = requests.post(
+        url, headers={"Content-Type": "application/json"}, json=payload, timeout=10
+    )
+
+    return response.json()
+
+
+# Configuration for Sui API
+def get_sui_api_url():
+    api_key = os.environ.get("BLOCKPI_SUI_RPC_KEY", "")
+    return f"https://sui.blockpi.network/v1/rpc/{api_key}"
+
+
+# Call Sui API with the provided method and parameters
+def call_sui_api(method, params):
+    url = get_sui_api_url()
     payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
 
     response = requests.post(
@@ -770,7 +1072,7 @@ def build_response(status_code, body):
 
 # Expected event structure:
 # {
-#   "path": "/test" | "/balances" | "/allowance" | "/metadata" | "/prices",
+#   "path": "/test" | "/balances" | "/allowance" | "/metadata" | "/prices", ...
 #   "httpMethod": "GET" | "POST" | "ANY" | "PUT",
 #   "body": "JSON string"
 # }
@@ -814,5 +1116,25 @@ def lambda_handler(event, context):
     elif path == "/prices" or path.endswith("/prices"):
         if event["httpMethod"] == "POST":
             return handle_prices(event)
+
+    elif path == "/sui/coin-metadata" or path.endswith("/sui/coin-metadata"):
+        if event["httpMethod"] == "POST":
+            return handle_sui_coin_metadata(event)
+
+    elif path == "/sui/balance" or path.endswith("/sui/balance"):
+        if event["httpMethod"] == "POST":
+            return handle_sui_balance(event)
+
+    elif path == "/sui/all-coins" or path.endswith("/sui/all-coins"):
+        if event["httpMethod"] == "POST":
+            return handle_sui_all_coins(event)
+
+    elif path == "/sui/all-balances" or path.endswith("/sui/all-balances"):
+        if event["httpMethod"] == "POST":
+            return handle_sui_all_balances(event)
+
+    elif path == "/sui/coins" or path.endswith("/sui/coins"):
+        if event["httpMethod"] == "POST":
+            return handle_sui_coins(event)
 
     return build_response(404, {"error": "Not found"})
