@@ -11,6 +11,9 @@ dynamodb = boto3.resource("dynamodb")
 rate_limit_table = dynamodb.Table(
     os.environ.get("RATE_LIMIT_TABLE_NAME", "api_rate_limits")
 )
+swap_metrics_table = dynamodb.Table(
+    os.environ.get("SWAP_METRICS_TABLE_NAME", "swap_metrics")
+)
 
 # Rate limit configuration
 RATE_LIMIT = 5000  # Number of requests allowed in 5 minutes
@@ -1047,6 +1050,168 @@ def call_sui_api(method, params):
     return response.json()
 
 
+# Expected event structure for /swap-metrics:
+# {
+#   "body": {
+#     "swapperAddress": "string", // Required: Address performing the swap
+#     "txHash": "string", // Optional: Transaction hash
+#     "swapType": "string", // Optional: Type of swap ("vanilla", "earn/etherFi", "earn/aave", "earn/pendle", "lend/aave")
+#     "path": "string", // Optional: Specific swap path
+#     "amount": "string", // Optional: Swap amount
+#     "tokenIn": "string", // Optional: Input token address
+#     "tokenOut": "string", // Optional: Output token address
+#     "network": "string" // Optional: Network name
+#   }
+# }
+# Response structure:
+# {
+#   "success": boolean,
+#   "message": "string"
+# }
+def handle_swap_metrics(event):
+    try:
+        body = json.loads(event.get("body", "{}"))
+    except json.JSONDecodeError:
+        return build_response(400, {"error": "Invalid JSON body"})
+
+    swapper_address = body.get("swapperAddress")
+    tx_hash = body.get("txHash")
+    swap_type = body.get("swapType", "vanilla")
+    path = body.get("path")
+    amount = body.get("amount")
+    token_in = body.get("tokenIn")
+    token_out = body.get("tokenOut")
+    network = body.get("network")
+
+    if not swapper_address:
+        return build_response(
+            400, {"error": "Missing required parameter: swapperAddress"}
+        )
+
+    try:
+        current_time = int(time.time())
+        current_date = datetime.fromtimestamp(current_time, tz=timezone.utc).strftime(
+            "%Y-%m-%d"
+        )
+
+        # 1. Update global swap count
+        try:
+            swap_metrics_table.update_item(
+                Key={"pk": "GLOBAL", "sk": "COUNT"},
+                UpdateExpression="ADD swap_count :inc",
+                ExpressionAttributeValues={":inc": 1},
+            )
+        except ClientError:
+            # If item doesn't exist, create it
+            swap_metrics_table.put_item(
+                Item={
+                    "pk": "GLOBAL",
+                    "sk": "COUNT",
+                    "swap_count": 1,
+                    "created_at": current_time,
+                }
+            )
+
+        # 2. Update daily swap count
+        try:
+            swap_metrics_table.update_item(
+                Key={"pk": "GLOBAL", "sk": f"DAILY#{current_date}"},
+                UpdateExpression="ADD daily_count :inc",
+                ExpressionAttributeValues={":inc": 1},
+            )
+        except ClientError:
+            swap_metrics_table.put_item(
+                Item={
+                    "pk": "GLOBAL",
+                    "sk": f"DAILY#{current_date}",
+                    "daily_count": 1,
+                    "date": current_date,
+                    "created_at": current_time,
+                }
+            )
+
+        # 3. Update swap type metrics
+        if swap_type:
+            try:
+                swap_metrics_table.update_item(
+                    Key={"pk": f"TYPE#{swap_type}", "sk": f"DAILY#{current_date}"},
+                    UpdateExpression="ADD type_count :inc",
+                    ExpressionAttributeValues={":inc": 1},
+                )
+            except ClientError:
+                swap_metrics_table.put_item(
+                    Item={
+                        "pk": f"TYPE#{swap_type}",
+                        "sk": f"DAILY#{current_date}",
+                        "type_count": 1,
+                        "swap_type": swap_type,
+                        "date": current_date,
+                        "created_at": current_time,
+                    }
+                )
+
+        # 4. Record individual swap if tx_hash provided
+        if tx_hash:
+            swap_data = {
+                "pk": f"SWAP#{tx_hash}",
+                "sk": "METADATA",
+                "swapper_address": swapper_address,
+                "tx_hash": tx_hash,
+                "swap_type": swap_type,
+                "timestamp": current_time,
+                "date": current_date,
+            }
+
+            # Add optional fields if provided
+            if path:
+                swap_data["path"] = path
+            if amount:
+                swap_data["amount"] = amount
+            if token_in:
+                swap_data["token_in"] = token_in
+            if token_out:
+                swap_data["token_out"] = token_out
+            if network:
+                swap_data["network"] = network
+
+            swap_metrics_table.put_item(Item=swap_data)
+
+        # 5. Record user swap activity
+        user_swap_data = {
+            "pk": f"USER#{swapper_address}",
+            "sk": f"SWAP#{current_time}#{tx_hash or 'unknown'}",
+            "swapper_address": swapper_address,
+            "swap_type": swap_type,
+            "timestamp": current_time,
+            "date": current_date,
+        }
+
+        if tx_hash:
+            user_swap_data["tx_hash"] = tx_hash
+        if path:
+            user_swap_data["path"] = path
+        if amount:
+            user_swap_data["amount"] = amount
+        if token_in:
+            user_swap_data["token_in"] = token_in
+        if token_out:
+            user_swap_data["token_out"] = token_out
+        if network:
+            user_swap_data["network"] = network
+
+        swap_metrics_table.put_item(Item=user_swap_data)
+
+        return build_response(
+            200, {"success": True, "message": "Swap metrics recorded successfully"}
+        )
+
+    except Exception as e:
+        print(f"Error recording swap metrics: {str(e)}")
+        return build_response(
+            500, {"error": f"Failed to record swap metrics: {str(e)}"}
+        )
+
+
 # Expected parameters:
 # - status_code: Integer HTTP status code
 # - body: Dictionary/object to be serialized to JSON
@@ -1136,5 +1301,9 @@ def lambda_handler(event, context):
     elif path == "/sui/coins" or path.endswith("/sui/coins"):
         if event["httpMethod"] == "POST":
             return handle_sui_coins(event)
+
+    elif path == "/swap-metrics" or path.endswith("/swap-metrics"):
+        if event["httpMethod"] == "POST":
+            return handle_swap_metrics(event)
 
     return build_response(404, {"error": "Not found"})
