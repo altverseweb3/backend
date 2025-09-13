@@ -368,7 +368,11 @@ def handle_balances(event):
                 padded_balance = "0x" + native_balance.zfill(64)
 
             native_token_info = {
-                "contractAddress": "0x0000000000000000000000000000000000000000",  # Zero address for native token
+                "contractAddress": (
+                    "0x0000000000000000000000000000000000000000"
+                    if network != "polygon-mainnet"
+                    else "0x0000000000000000000000000000000000001010"
+                ),
                 "tokenBalance": padded_balance,
             }
             formatted_balances.append(native_token_info)
