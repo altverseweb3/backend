@@ -932,6 +932,534 @@ def handle_sui_all_balances(event):
         return build_response(500, {"error": f"An error occurred: {str(e)}"})
 
 
+# Expected event structure for /usage:
+# Query parameters:
+# {
+#   "view": "all" | "daily" | "protocol", // Type of view (default: "all")
+#   "protocol": "entrance" | "swap" | "lending" | "earn", // Filter by protocol/section
+#   "userAddress": "string", // Filter by user address
+#   "action": "string", // Filter by action (e.g., "deposit", "withdraw", "supply", etc.)
+#   "startDate": "YYYY-MM-DD", // Start date filter
+#   "endDate": "YYYY-MM-DD", // End date filter
+#   "summary": "true" | "false", // Return summary or detailed data (default: "false")
+#   "limit": number, // Limit number of results (for pagination)
+#   "lastKey": "string" // Last evaluated key for pagination
+# }
+def handle_usage(event):
+    """
+    Query metrics from the DynamoDB table with various filters and views.
+    """
+    try:
+        # Parse query parameters
+        query_params = event.get("queryStringParameters") or {}
+
+        view = query_params.get("view", "all")
+        protocol = query_params.get("protocol")
+        user_address = query_params.get("userAddress")
+        action = query_params.get("action")
+        start_date = query_params.get("startDate")
+        end_date = query_params.get("endDate")
+        summary = query_params.get("summary", "false").lower() == "true"
+        limit = int(query_params.get("limit", "100"))
+        last_key_str = query_params.get("lastKey")
+
+        # Parse lastKey if provided
+        last_key = None
+        if last_key_str:
+            try:
+                last_key = json.loads(last_key_str)
+            except:
+                pass
+
+        response_data = {
+            "view": view,
+            "filters": {},
+            "data": [],
+            "summary": {}
+        }
+
+        # Add active filters to response
+        if protocol:
+            response_data["filters"]["protocol"] = protocol
+        if user_address:
+            response_data["filters"]["userAddress"] = user_address
+        if action:
+            response_data["filters"]["action"] = action
+        if start_date:
+            response_data["filters"]["startDate"] = start_date
+        if end_date:
+            response_data["filters"]["endDate"] = end_date
+
+        # Build query based on view type
+        if user_address:
+            # User-specific queries
+            response_data = query_user_metrics(
+                user_address, protocol, action, start_date, end_date,
+                summary, limit, last_key
+            )
+        elif view == "daily":
+            # Daily aggregated metrics
+            response_data = query_daily_metrics(
+                protocol, start_date, end_date, summary, limit, last_key
+            )
+        elif view == "protocol":
+            # Protocol-specific metrics
+            if not protocol:
+                return build_response(
+                    400, {"error": "Protocol parameter is required for protocol view"}
+                )
+            response_data = query_protocol_metrics(
+                protocol, action, start_date, end_date, summary, limit, last_key
+            )
+        else:
+            # Default: all metrics view
+            response_data = query_all_metrics(
+                protocol, start_date, end_date, summary, limit, last_key
+            )
+
+        return build_response(200, response_data)
+
+    except Exception as e:
+        print(f"Error handling usage request: {str(e)}")
+        return build_response(500, {"error": f"Failed to retrieve metrics: {str(e)}"})
+
+
+def query_user_metrics(user_address, protocol, action, start_date, end_date,
+                       summary, limit, last_key):
+    """
+    Query metrics for a specific user.
+    """
+    response_data = {
+        "view": "user",
+        "userAddress": user_address,
+        "data": [],
+        "summary": {}
+    }
+
+    try:
+        # Build the query
+        query_params = {
+            "KeyConditionExpression": "pk = :pk",
+            "ExpressionAttributeValues": {
+                ":pk": f"USER#{user_address}"
+            },
+            "Limit": limit
+        }
+
+        # Add SK range if dates provided
+        sk_conditions = []
+        if start_date or end_date:
+            if start_date and end_date:
+                # Convert dates to timestamps for range query
+                start_ts = int(datetime.strptime(start_date, "%Y-%m-%d").timestamp())
+                end_ts = int(datetime.strptime(end_date, "%Y-%m-%d").timestamp()) + 86399
+                query_params["KeyConditionExpression"] += " AND sk BETWEEN :start AND :end"
+                query_params["ExpressionAttributeValues"][":start"] = f"#{start_ts}"
+                query_params["ExpressionAttributeValues"][":end"] = f"#{end_ts}"
+            elif start_date:
+                start_ts = int(datetime.strptime(start_date, "%Y-%m-%d").timestamp())
+                query_params["KeyConditionExpression"] += " AND sk >= :start"
+                query_params["ExpressionAttributeValues"][":start"] = f"#{start_ts}"
+            elif end_date:
+                end_ts = int(datetime.strptime(end_date, "%Y-%m-%d").timestamp()) + 86399
+                query_params["KeyConditionExpression"] += " AND sk <= :end"
+                query_params["ExpressionAttributeValues"][":end"] = f"#{end_ts}"
+
+        # Add filters for protocol and action
+        filter_expressions = []
+        if protocol:
+            if protocol in ["entrance", "swap", "lending", "earn"]:
+                filter_expressions.append("metric_type = :protocol")
+                query_params["ExpressionAttributeValues"][":protocol"] = protocol
+
+        if action:
+            filter_expressions.append("#action = :action")
+            query_params["ExpressionAttributeValues"][":action"] = action
+            query_params["ExpressionAttributeNames"] = {"#action": "action"}
+
+        if filter_expressions:
+            query_params["FilterExpression"] = " AND ".join(filter_expressions)
+
+        if last_key:
+            query_params["ExclusiveStartKey"] = last_key
+
+        # Execute query
+        result = metrics_table.query(**query_params)
+
+        if summary:
+            # Generate summary statistics
+            summary_data = {
+                "totalActions": 0,
+                "byProtocol": {},
+                "byAction": {},
+                "dateRange": {}
+            }
+
+            for item in result.get("Items", []):
+                summary_data["totalActions"] += 1
+
+                # Count by protocol/metric type
+                metric_type = item.get("metric_type", "unknown")
+                summary_data["byProtocol"][metric_type] = \
+                    summary_data["byProtocol"].get(metric_type, 0) + 1
+
+                # Count by action if present
+                if "action" in item:
+                    action_type = item["action"]
+                    summary_data["byAction"][action_type] = \
+                        summary_data["byAction"].get(action_type, 0) + 1
+
+                # Track date range
+                item_date = item.get("date", "")
+                if item_date:
+                    if not summary_data["dateRange"].get("start") or \
+                       item_date < summary_data["dateRange"]["start"]:
+                        summary_data["dateRange"]["start"] = item_date
+                    if not summary_data["dateRange"].get("end") or \
+                       item_date > summary_data["dateRange"]["end"]:
+                        summary_data["dateRange"]["end"] = item_date
+
+            response_data["summary"] = summary_data
+            response_data["data"] = []  # Don't include raw data in summary mode
+        else:
+            # Return detailed data
+            response_data["data"] = result.get("Items", [])
+
+        # Add pagination info
+        if "LastEvaluatedKey" in result:
+            response_data["nextKey"] = json.dumps(result["LastEvaluatedKey"])
+            response_data["hasMore"] = True
+        else:
+            response_data["hasMore"] = False
+
+    except Exception as e:
+        print(f"Error querying user metrics: {str(e)}")
+        raise
+
+    return response_data
+
+
+def query_daily_metrics(protocol, start_date, end_date, summary, limit, last_key):
+    """
+    Query daily aggregated metrics.
+    """
+    response_data = {
+        "view": "daily",
+        "data": [],
+        "summary": {}
+    }
+
+    try:
+        # Query daily metrics
+        query_params = {
+            "KeyConditionExpression": "pk = :pk",
+            "ExpressionAttributeValues": {
+                ":pk": "GLOBAL"
+            },
+            "Limit": limit
+        }
+
+        # Build SK condition for daily data
+        sk_prefix = "DAILY#"
+        if protocol:
+            sk_prefix = f"DAILY#"
+            # We'll filter by checking if SK contains the protocol
+
+        if start_date and end_date:
+            query_params["KeyConditionExpression"] += " AND sk BETWEEN :start AND :end"
+            query_params["ExpressionAttributeValues"][":start"] = f"DAILY#{start_date}"
+            query_params["ExpressionAttributeValues"][":end"] = f"DAILY#{end_date}#zzz"
+        elif start_date:
+            query_params["KeyConditionExpression"] += " AND sk >= :start"
+            query_params["ExpressionAttributeValues"][":start"] = f"DAILY#{start_date}"
+        elif end_date:
+            query_params["KeyConditionExpression"] += " AND sk <= :end"
+            query_params["ExpressionAttributeValues"][":end"] = f"DAILY#{end_date}#zzz"
+        else:
+            query_params["KeyConditionExpression"] += " AND begins_with(sk, :prefix)"
+            query_params["ExpressionAttributeValues"][":prefix"] = sk_prefix
+
+        # Add protocol filter if specified
+        if protocol:
+            query_params["FilterExpression"] = "contains(sk, :protocol)"
+            query_params["ExpressionAttributeValues"][":protocol"] = f"#{protocol}"
+
+        if last_key:
+            query_params["ExclusiveStartKey"] = last_key
+
+        # Execute query
+        result = metrics_table.query(**query_params)
+
+        if summary:
+            # Aggregate daily data
+            summary_data = {
+                "totalDays": set(),
+                "totalCount": 0,
+                "byDate": {},
+                "byProtocol": {}
+            }
+
+            for item in result.get("Items", []):
+                date = item.get("date", "")
+                count = item.get("daily_count", 0)
+
+                if date:
+                    summary_data["totalDays"].add(date)
+                    summary_data["totalCount"] += count
+
+                    if date not in summary_data["byDate"]:
+                        summary_data["byDate"][date] = 0
+                    summary_data["byDate"][date] += count
+
+                    # Extract protocol from SK if present
+                    sk = item.get("sk", "")
+                    for p in ["entrance", "swap", "lending", "earn"]:
+                        if f"#{p}" in sk:
+                            if p not in summary_data["byProtocol"]:
+                                summary_data["byProtocol"][p] = 0
+                            summary_data["byProtocol"][p] += count
+                            break
+
+            summary_data["totalDays"] = len(summary_data["totalDays"])
+            response_data["summary"] = summary_data
+            response_data["data"] = []
+        else:
+            # Return detailed daily data
+            response_data["data"] = result.get("Items", [])
+
+        # Add pagination info
+        if "LastEvaluatedKey" in result:
+            response_data["nextKey"] = json.dumps(result["LastEvaluatedKey"])
+            response_data["hasMore"] = True
+        else:
+            response_data["hasMore"] = False
+
+    except Exception as e:
+        print(f"Error querying daily metrics: {str(e)}")
+        raise
+
+    return response_data
+
+
+def query_protocol_metrics(protocol, action, start_date, end_date, summary, limit, last_key):
+    """
+    Query metrics for a specific protocol/section.
+    """
+    response_data = {
+        "view": "protocol",
+        "protocol": protocol,
+        "data": [],
+        "summary": {}
+    }
+
+    try:
+        # Query protocol-specific metrics
+        pk_prefix = f"TYPE#{protocol}"
+        if action:
+            pk_prefix = f"TYPE#{protocol}#{action}"
+
+        query_params = {
+            "KeyConditionExpression": "begins_with(pk, :pk)",
+            "ExpressionAttributeValues": {
+                ":pk": pk_prefix
+            },
+            "Limit": limit
+        }
+
+        # Add date range filters on SK
+        if start_date and end_date:
+            query_params["FilterExpression"] = "#date BETWEEN :start AND :end"
+            query_params["ExpressionAttributeValues"][":start"] = start_date
+            query_params["ExpressionAttributeValues"][":end"] = end_date
+            query_params["ExpressionAttributeNames"] = {"#date": "date"}
+        elif start_date:
+            query_params["FilterExpression"] = "#date >= :start"
+            query_params["ExpressionAttributeValues"][":start"] = start_date
+            query_params["ExpressionAttributeNames"] = {"#date": "date"}
+        elif end_date:
+            query_params["FilterExpression"] = "#date <= :end"
+            query_params["ExpressionAttributeValues"][":end"] = end_date
+            query_params["ExpressionAttributeNames"] = {"#date": "date"}
+
+        if last_key:
+            query_params["ExclusiveStartKey"] = last_key
+
+        # Use scan since we're using begins_with on pk
+        result = metrics_table.scan(**query_params)
+
+        if summary:
+            # Generate protocol-specific summary
+            summary_data = {
+                "protocol": protocol,
+                "totalCount": 0,
+                "byAction": {},
+                "byDate": {},
+                "dateRange": {}
+            }
+
+            for item in result.get("Items", []):
+                count = item.get("type_count", 0)
+                action_type = item.get("action", "")
+                date = item.get("date", "")
+
+                summary_data["totalCount"] += count
+
+                if action_type:
+                    if action_type not in summary_data["byAction"]:
+                        summary_data["byAction"][action_type] = 0
+                    summary_data["byAction"][action_type] += count
+
+                if date:
+                    if date not in summary_data["byDate"]:
+                        summary_data["byDate"][date] = 0
+                    summary_data["byDate"][date] += count
+
+                    # Track date range
+                    if not summary_data["dateRange"].get("start") or \
+                       date < summary_data["dateRange"]["start"]:
+                        summary_data["dateRange"]["start"] = date
+                    if not summary_data["dateRange"].get("end") or \
+                       date > summary_data["dateRange"]["end"]:
+                        summary_data["dateRange"]["end"] = date
+
+            response_data["summary"] = summary_data
+            response_data["data"] = []
+        else:
+            # Return detailed data
+            response_data["data"] = result.get("Items", [])
+
+        # Add pagination info
+        if "LastEvaluatedKey" in result:
+            response_data["nextKey"] = json.dumps(result["LastEvaluatedKey"])
+            response_data["hasMore"] = True
+        else:
+            response_data["hasMore"] = False
+
+    except Exception as e:
+        print(f"Error querying protocol metrics: {str(e)}")
+        raise
+
+    return response_data
+
+
+def query_all_metrics(protocol, start_date, end_date, summary, limit, last_key):
+    """
+    Query all metrics with optional filters.
+    """
+    response_data = {
+        "view": "all",
+        "data": [],
+        "summary": {}
+    }
+
+    try:
+        # Query global counts
+        global_counts = {}
+
+        # Get global entrance count
+        entrance_result = metrics_table.get_item(
+            Key={"pk": "GLOBAL", "sk": "COUNT#entrance"}
+        )
+        if "Item" in entrance_result:
+            global_counts["entrance"] = entrance_result["Item"].get("entrance_count", 0)
+
+        # Get global swap count
+        swap_result = metrics_table.get_item(
+            Key={"pk": "GLOBAL", "sk": "COUNT#swap"}
+        )
+        if "Item" in swap_result:
+            global_counts["swap"] = swap_result["Item"].get("swap_count", 0)
+
+        # Get global earn count
+        earn_result = metrics_table.get_item(
+            Key={"pk": "GLOBAL", "sk": "COUNT#earn"}
+        )
+        if "Item" in earn_result:
+            global_counts["earn"] = earn_result["Item"].get("earn_count", 0)
+
+        # Get global lending count
+        lending_result = metrics_table.get_item(
+            Key={"pk": "GLOBAL", "sk": "COUNT#lending"}
+        )
+        if "Item" in lending_result:
+            global_counts["lending"] = lending_result["Item"].get("lending_count", 0)
+
+        if summary:
+            # Return summary only
+            summary_data = {
+                "totalCounts": global_counts,
+                "grandTotal": sum(global_counts.values())
+            }
+
+            # If date range specified, get daily totals within range
+            if start_date or end_date:
+                daily_data = query_daily_metrics(
+                    protocol, start_date, end_date, True, 1000, None
+                )
+                summary_data["dateRangeCounts"] = daily_data.get("summary", {})
+
+            response_data["summary"] = summary_data
+            response_data["data"] = []
+        else:
+            # Return detailed view - query all daily metrics
+            scan_params = {
+                "Limit": limit
+            }
+
+            # Add filters
+            filter_expressions = []
+            expr_values = {}
+            expr_names = {}
+
+            if start_date or end_date:
+                if start_date and end_date:
+                    filter_expressions.append("#date BETWEEN :start AND :end")
+                    expr_values[":start"] = start_date
+                    expr_values[":end"] = end_date
+                elif start_date:
+                    filter_expressions.append("#date >= :start")
+                    expr_values[":start"] = start_date
+                elif end_date:
+                    filter_expressions.append("#date <= :end")
+                    expr_values[":end"] = end_date
+                expr_names["#date"] = "date"
+
+            if protocol:
+                filter_expressions.append("metric_type = :protocol OR contains(sk, :protocol_str)")
+                expr_values[":protocol"] = protocol
+                expr_values[":protocol_str"] = f"#{protocol}"
+
+            if filter_expressions:
+                scan_params["FilterExpression"] = " AND ".join(filter_expressions)
+                if expr_values:
+                    scan_params["ExpressionAttributeValues"] = expr_values
+                if expr_names:
+                    scan_params["ExpressionAttributeNames"] = expr_names
+
+            if last_key:
+                scan_params["ExclusiveStartKey"] = last_key
+
+            # Execute scan
+            result = metrics_table.scan(**scan_params)
+
+            # Combine global counts with detailed data
+            response_data["globalCounts"] = global_counts
+            response_data["data"] = result.get("Items", [])
+
+            # Add pagination info
+            if "LastEvaluatedKey" in result:
+                response_data["nextKey"] = json.dumps(result["LastEvaluatedKey"])
+                response_data["hasMore"] = True
+            else:
+                response_data["hasMore"] = False
+
+    except Exception as e:
+        print(f"Error querying all metrics: {str(e)}")
+        raise
+
+    return response_data
+
+
 # Expected event structure for /sui/coins:
 # {
 #   "body": {
@@ -1685,5 +2213,9 @@ def lambda_handler(event, context):
                     )
             except json.JSONDecodeError:
                 return build_response(400, {"error": "Invalid JSON body"})
+
+    elif path == "/usage" or path.endswith("/usage"):
+        if event["httpMethod"] == "GET":
+            return handle_usage(event)
 
     return build_response(404, {"error": "Not found"})
