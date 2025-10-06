@@ -11,9 +11,7 @@ dynamodb = boto3.resource("dynamodb")
 rate_limit_table = dynamodb.Table(
     os.environ.get("RATE_LIMIT_TABLE_NAME", "api_rate_limits")
 )
-swap_metrics_table = dynamodb.Table(
-    os.environ.get("SWAP_METRICS_TABLE_NAME", "swap_metrics")
-)
+metrics_table = dynamodb.Table(os.environ.get("METRICS_TABLE_NAME", "metrics"))
 
 # Rate limit configuration
 RATE_LIMIT = 5000  # Number of requests allowed in 5 minutes
@@ -1054,6 +1052,362 @@ def call_sui_api(method, params):
     return response.json()
 
 
+# Expected event structure for /metrics (entrance):
+# {
+#   "body": {
+#     "metricType": "entrance", // Required: Type of metric
+#     "userAddress": "string", // Optional: User address if available
+#   }
+# }
+def handle_entrance_metrics(event):
+    try:
+        body = json.loads(event.get("body", "{}"))
+    except json.JSONDecodeError:
+        return build_response(400, {"error": "Invalid JSON body"})
+
+    user_address = body.get("userAddress")
+
+    try:
+        current_time = int(time.time())
+        current_date = datetime.fromtimestamp(current_time, tz=timezone.utc).strftime(
+            "%Y-%m-%d"
+        )
+
+        # 1. Update global entrance count
+        try:
+            metrics_table.update_item(
+                Key={"pk": "GLOBAL", "sk": "COUNT#entrance"},
+                UpdateExpression="ADD entrance_count :inc",
+                ExpressionAttributeValues={":inc": 1},
+            )
+        except ClientError:
+            metrics_table.put_item(
+                Item={
+                    "pk": "GLOBAL",
+                    "sk": "COUNT#entrance",
+                    "entrance_count": 1,
+                    "created_at": current_time,
+                }
+            )
+
+        # 2. Update daily entrance count
+        try:
+            metrics_table.update_item(
+                Key={"pk": "GLOBAL", "sk": f"DAILY#{current_date}#entrance"},
+                UpdateExpression="ADD daily_count :inc",
+                ExpressionAttributeValues={":inc": 1},
+            )
+        except ClientError:
+            metrics_table.put_item(
+                Item={
+                    "pk": "GLOBAL",
+                    "sk": f"DAILY#{current_date}#entrance",
+                    "daily_count": 1,
+                    "date": current_date,
+                    "created_at": current_time,
+                }
+            )
+
+        # 3. Record user entrance if address provided
+        if user_address:
+            metrics_table.put_item(
+                Item={
+                    "pk": f"USER#{user_address}",
+                    "sk": f"entrance#{current_time}",
+                    "metric_type": "entrance",
+                    "user_address": user_address,
+                    "timestamp": current_time,
+                    "date": current_date,
+                }
+            )
+
+        return build_response(
+            200, {"success": True, "message": "Entrance metrics recorded successfully"}
+        )
+
+    except Exception as e:
+        print(f"Error recording entrance metrics: {str(e)}")
+        return build_response(
+            500, {"error": f"Failed to record entrance metrics: {str(e)}"}
+        )
+
+
+# Expected event structure for /metrics (earn):
+# {
+#   "body": {
+#     "metricType": "earn", // Required: Type of metric
+#     "protocol": "string", // Required: Protocol name (e.g., "etherFi", "aave", "pendle")
+#     "action": "string", // Required: Action type ("deposit", "withdraw")
+#     "userAddress": "string", // Required: User address
+#     "vaultId": "string", // Optional: Vault ID
+#     "asset": "string", // Required: Asset symbol
+#     "amount": "string", // Optional: Amount
+#     "chain": "string", // Required: Chain name
+#     "txHash": "string", // Optional: Transaction hash
+#   }
+# }
+def handle_earn_metrics(event):
+    try:
+        body = json.loads(event.get("body", "{}"))
+    except json.JSONDecodeError:
+        return build_response(400, {"error": "Invalid JSON body"})
+
+    protocol = body.get("protocol")
+    action = body.get("action")
+    user_address = body.get("userAddress")
+    vault_id = body.get("vaultId")
+    asset = body.get("asset")
+    amount = body.get("amount")
+    chain = body.get("chain")
+    tx_hash = body.get("txHash")
+
+    if not protocol or not action or not user_address or not asset or not chain:
+        return build_response(
+            400,
+            {
+                "error": "Missing required parameters: protocol, action, userAddress, asset, chain"
+            },
+        )
+
+    try:
+        current_time = int(time.time())
+        current_date = datetime.fromtimestamp(current_time, tz=timezone.utc).strftime(
+            "%Y-%m-%d"
+        )
+
+        # 1. Update global earn count
+        try:
+            metrics_table.update_item(
+                Key={"pk": "GLOBAL", "sk": "COUNT#earn"},
+                UpdateExpression="ADD earn_count :inc",
+                ExpressionAttributeValues={":inc": 1},
+            )
+        except ClientError:
+            metrics_table.put_item(
+                Item={
+                    "pk": "GLOBAL",
+                    "sk": "COUNT#earn",
+                    "earn_count": 1,
+                    "created_at": current_time,
+                }
+            )
+
+        # 2. Update daily earn count
+        try:
+            metrics_table.update_item(
+                Key={"pk": "GLOBAL", "sk": f"DAILY#{current_date}#earn"},
+                UpdateExpression="ADD daily_count :inc",
+                ExpressionAttributeValues={":inc": 1},
+            )
+        except ClientError:
+            metrics_table.put_item(
+                Item={
+                    "pk": "GLOBAL",
+                    "sk": f"DAILY#{current_date}#earn",
+                    "daily_count": 1,
+                    "date": current_date,
+                    "created_at": current_time,
+                }
+            )
+
+        # 3. Update protocol/action counts
+        try:
+            metrics_table.update_item(
+                Key={
+                    "pk": f"TYPE#earn#{protocol}#{action}",
+                    "sk": f"DAILY#{current_date}",
+                },
+                UpdateExpression="ADD type_count :inc",
+                ExpressionAttributeValues={":inc": 1},
+            )
+        except ClientError:
+            metrics_table.put_item(
+                Item={
+                    "pk": f"TYPE#earn#{protocol}#{action}",
+                    "sk": f"DAILY#{current_date}",
+                    "type_count": 1,
+                    "protocol": protocol,
+                    "action": action,
+                    "date": current_date,
+                    "created_at": current_time,
+                }
+            )
+
+        # 4. Record user earn activity
+        user_earn_data = {
+            "pk": f"USER#{user_address}",
+            "sk": f"earn#{current_time}#{tx_hash or 'unknown'}",
+            "metric_type": "earn",
+            "protocol": protocol,
+            "action": action,
+            "user_address": user_address,
+            "asset": asset,
+            "chain": chain,
+            "timestamp": current_time,
+            "date": current_date,
+        }
+
+        if vault_id:
+            user_earn_data["vault_id"] = vault_id
+        if amount:
+            user_earn_data["amount"] = amount
+        if tx_hash:
+            user_earn_data["tx_hash"] = tx_hash
+
+        metrics_table.put_item(Item=user_earn_data)
+
+        return build_response(
+            200, {"success": True, "message": "Earn metrics recorded successfully"}
+        )
+
+    except Exception as e:
+        print(f"Error recording earn metrics: {str(e)}")
+        return build_response(
+            500, {"error": f"Failed to record earn metrics: {str(e)}"}
+        )
+
+
+# Expected event structure for /metrics (lending):
+# {
+#   "body": {
+#     "metricType": "lending", // Required: Type of metric
+#     "protocol": "string", // Required: Protocol name (e.g., "aave")
+#     "action": "string", // Required: Action type ("supply", "borrow", "withdraw", "repay")
+#     "userAddress": "string", // Required: User address
+#     "marketId": "string", // Optional: Market ID
+#     "asset": "string", // Required: Asset symbol
+#     "amount": "string", // Required: Amount
+#     "chain": "string", // Required: Chain name
+#     "txHash": "string", // Optional: Transaction hash
+#   }
+# }
+def handle_lending_metrics(event):
+    try:
+        body = json.loads(event.get("body", "{}"))
+    except json.JSONDecodeError:
+        return build_response(400, {"error": "Invalid JSON body"})
+
+    protocol = body.get("protocol")
+    action = body.get("action")
+    user_address = body.get("userAddress")
+    market_id = body.get("marketId")
+    asset = body.get("asset")
+    amount = body.get("amount")
+    chain = body.get("chain")
+    tx_hash = body.get("txHash")
+
+    if (
+        not protocol
+        or not action
+        or not user_address
+        or not asset
+        or not amount
+        or not chain
+    ):
+        return build_response(
+            400,
+            {
+                "error": "Missing required parameters: protocol, action, userAddress, asset, amount, chain"
+            },
+        )
+
+    try:
+        current_time = int(time.time())
+        current_date = datetime.fromtimestamp(current_time, tz=timezone.utc).strftime(
+            "%Y-%m-%d"
+        )
+
+        # 1. Update global lending count
+        try:
+            metrics_table.update_item(
+                Key={"pk": "GLOBAL", "sk": "COUNT#lending"},
+                UpdateExpression="ADD lending_count :inc",
+                ExpressionAttributeValues={":inc": 1},
+            )
+        except ClientError:
+            metrics_table.put_item(
+                Item={
+                    "pk": "GLOBAL",
+                    "sk": "COUNT#lending",
+                    "lending_count": 1,
+                    "created_at": current_time,
+                }
+            )
+
+        # 2. Update daily lending count
+        try:
+            metrics_table.update_item(
+                Key={"pk": "GLOBAL", "sk": f"DAILY#{current_date}#lending"},
+                UpdateExpression="ADD daily_count :inc",
+                ExpressionAttributeValues={":inc": 1},
+            )
+        except ClientError:
+            metrics_table.put_item(
+                Item={
+                    "pk": "GLOBAL",
+                    "sk": f"DAILY#{current_date}#lending",
+                    "daily_count": 1,
+                    "date": current_date,
+                    "created_at": current_time,
+                }
+            )
+
+        # 3. Update protocol/action counts
+        try:
+            metrics_table.update_item(
+                Key={
+                    "pk": f"TYPE#lending#{protocol}#{action}",
+                    "sk": f"DAILY#{current_date}",
+                },
+                UpdateExpression="ADD type_count :inc",
+                ExpressionAttributeValues={":inc": 1},
+            )
+        except ClientError:
+            metrics_table.put_item(
+                Item={
+                    "pk": f"TYPE#lending#{protocol}#{action}",
+                    "sk": f"DAILY#{current_date}",
+                    "type_count": 1,
+                    "protocol": protocol,
+                    "action": action,
+                    "date": current_date,
+                    "created_at": current_time,
+                }
+            )
+
+        # 4. Record user lending activity
+        user_lending_data = {
+            "pk": f"USER#{user_address}",
+            "sk": f"lending#{current_time}#{tx_hash or 'unknown'}",
+            "metric_type": "lending",
+            "protocol": protocol,
+            "action": action,
+            "user_address": user_address,
+            "asset": asset,
+            "amount": amount,
+            "chain": chain,
+            "timestamp": current_time,
+            "date": current_date,
+        }
+
+        if market_id:
+            user_lending_data["market_id"] = market_id
+        if tx_hash:
+            user_lending_data["tx_hash"] = tx_hash
+
+        metrics_table.put_item(Item=user_lending_data)
+
+        return build_response(
+            200, {"success": True, "message": "Lending metrics recorded successfully"}
+        )
+
+    except Exception as e:
+        print(f"Error recording lending metrics: {str(e)}")
+        return build_response(
+            500, {"error": f"Failed to record lending metrics: {str(e)}"}
+        )
+
+
 # Expected event structure for /swap-metrics:
 # {
 #   "body": {
@@ -1100,17 +1454,17 @@ def handle_swap_metrics(event):
 
         # 1. Update global swap count
         try:
-            swap_metrics_table.update_item(
-                Key={"pk": "GLOBAL", "sk": "COUNT"},
+            metrics_table.update_item(
+                Key={"pk": "GLOBAL", "sk": "COUNT#swap"},
                 UpdateExpression="ADD swap_count :inc",
                 ExpressionAttributeValues={":inc": 1},
             )
         except ClientError:
             # If item doesn't exist, create it
-            swap_metrics_table.put_item(
+            metrics_table.put_item(
                 Item={
                     "pk": "GLOBAL",
-                    "sk": "COUNT",
+                    "sk": "COUNT#swap",
                     "swap_count": 1,
                     "created_at": current_time,
                 }
@@ -1118,16 +1472,16 @@ def handle_swap_metrics(event):
 
         # 2. Update daily swap count
         try:
-            swap_metrics_table.update_item(
-                Key={"pk": "GLOBAL", "sk": f"DAILY#{current_date}"},
+            metrics_table.update_item(
+                Key={"pk": "GLOBAL", "sk": f"DAILY#{current_date}#swap"},
                 UpdateExpression="ADD daily_count :inc",
                 ExpressionAttributeValues={":inc": 1},
             )
         except ClientError:
-            swap_metrics_table.put_item(
+            metrics_table.put_item(
                 Item={
                     "pk": "GLOBAL",
-                    "sk": f"DAILY#{current_date}",
+                    "sk": f"DAILY#{current_date}#swap",
                     "daily_count": 1,
                     "date": current_date,
                     "created_at": current_time,
@@ -1137,15 +1491,15 @@ def handle_swap_metrics(event):
         # 3. Update swap type metrics
         if swap_type:
             try:
-                swap_metrics_table.update_item(
-                    Key={"pk": f"TYPE#{swap_type}", "sk": f"DAILY#{current_date}"},
+                metrics_table.update_item(
+                    Key={"pk": f"TYPE#swap#{swap_type}", "sk": f"DAILY#{current_date}"},
                     UpdateExpression="ADD type_count :inc",
                     ExpressionAttributeValues={":inc": 1},
                 )
             except ClientError:
-                swap_metrics_table.put_item(
+                metrics_table.put_item(
                     Item={
-                        "pk": f"TYPE#{swap_type}",
+                        "pk": f"TYPE#swap#{swap_type}",
                         "sk": f"DAILY#{current_date}",
                         "type_count": 1,
                         "swap_type": swap_type,
@@ -1178,12 +1532,13 @@ def handle_swap_metrics(event):
             if network:
                 swap_data["network"] = network
 
-            swap_metrics_table.put_item(Item=swap_data)
+            metrics_table.put_item(Item=swap_data)
 
         # 5. Record user swap activity
         user_swap_data = {
             "pk": f"USER#{swapper_address}",
-            "sk": f"SWAP#{current_time}#{tx_hash or 'unknown'}",
+            "sk": f"swap#{current_time}#{tx_hash or 'unknown'}",
+            "metric_type": "swap",
             "swapper_address": swapper_address,
             "swap_type": swap_type,
             "timestamp": current_time,
@@ -1203,7 +1558,7 @@ def handle_swap_metrics(event):
         if network:
             user_swap_data["network"] = network
 
-        swap_metrics_table.put_item(Item=user_swap_data)
+        metrics_table.put_item(Item=user_swap_data)
 
         return build_response(
             200, {"success": True, "message": "Swap metrics recorded successfully"}
@@ -1306,8 +1661,29 @@ def lambda_handler(event, context):
         if event["httpMethod"] == "POST":
             return handle_sui_coins(event)
 
-    elif path == "/swap-metrics" or path.endswith("/swap-metrics"):
+    elif path == "/metrics" or path.endswith("/metrics"):
         if event["httpMethod"] == "POST":
-            return handle_swap_metrics(event)
+            # Parse the body to get metricType
+            try:
+                body = json.loads(event.get("body", "{}"))
+                metric_type = body.get("metricType")
+
+                if metric_type == "swap":
+                    return handle_swap_metrics(event)
+                elif metric_type == "entrance":
+                    return handle_entrance_metrics(event)
+                elif metric_type == "earn":
+                    return handle_earn_metrics(event)
+                elif metric_type == "lending":
+                    return handle_lending_metrics(event)
+                else:
+                    return build_response(
+                        400,
+                        {
+                            "error": f"Invalid metricType: {metric_type}. Must be one of: swap, entrance, earn, lending"
+                        },
+                    )
+            except json.JSONDecodeError:
+                return build_response(400, {"error": "Invalid JSON body"})
 
     return build_response(404, {"error": "Not found"})
