@@ -1949,7 +1949,8 @@ def handle_lending_metrics(event):
 #     "amount": "string", // Optional: Swap amount
 #     "tokenIn": "string", // Optional: Input token address
 #     "tokenOut": "string", // Optional: Output token address
-#     "network": "string" // Optional: Network name
+#     "sourceNetwork": "string" // Optional: Source network name
+#     "destinationNetwork": "string" // Optional: Destination network name
 #   }
 # }
 # Response structure:
@@ -1970,7 +1971,8 @@ def handle_swap_metrics(event):
     amount = body.get("amount")
     token_in = body.get("tokenIn")
     token_out = body.get("tokenOut")
-    network = body.get("network")
+    source_network = body.get("sourceNetwork")
+    destination_network = body.get("destinationNetwork")
 
     if not swapper_address:
         return build_response(
@@ -2049,6 +2051,8 @@ def handle_swap_metrics(event):
                 "swap_type": swap_type,
                 "timestamp": current_time,
                 "date": current_date,
+                "source_network": source_network,
+                "destination_network": destination_network,
             }
 
             # Add optional fields if provided
@@ -2060,8 +2064,6 @@ def handle_swap_metrics(event):
                 swap_data["token_in"] = token_in
             if token_out:
                 swap_data["token_out"] = token_out
-            if network:
-                swap_data["network"] = network
 
             metrics_table.put_item(Item=swap_data)
 
@@ -2074,6 +2076,8 @@ def handle_swap_metrics(event):
             "swap_type": swap_type,
             "timestamp": current_time,
             "date": current_date,
+            "source_network": source_network,
+            "destination_network": destination_network,
         }
 
         if tx_hash:
@@ -2086,8 +2090,6 @@ def handle_swap_metrics(event):
             user_swap_data["token_in"] = token_in
         if token_out:
             user_swap_data["token_out"] = token_out
-        if network:
-            user_swap_data["network"] = network
 
         metrics_table.put_item(Item=user_swap_data)
 
