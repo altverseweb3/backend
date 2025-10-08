@@ -3,6 +3,7 @@ import os
 import requests
 import boto3
 import time
+from decimal import Decimal
 from botocore.exceptions import ClientError
 from datetime import datetime, timedelta, timezone
 
@@ -2101,6 +2102,16 @@ def handle_swap_metrics(event):
         )
 
 
+def decimal_default(obj):
+    if isinstance(obj, Decimal):
+        # Convert to int if no fractional part, else float
+        if obj % 1 == 0:
+            return int(obj)
+        else:
+            return float(obj)
+    raise TypeError
+
+
 # Expected parameters:
 # - status_code: Integer HTTP status code
 # - body: Dictionary/object to be serialized to JSON
@@ -2119,7 +2130,7 @@ def build_response(status_code, body):
             "Access-Control-Allow-Methods": "ANY,OPTIONS,POST,GET",
             "Content-Type": "application/json",
         },
-        "body": json.dumps(body).encode("utf-8"),
+        "body": json.dumps(body, default=decimal_default).encode("utf-8"),
         "isBase64Encoded": True,
     }
 
