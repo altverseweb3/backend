@@ -111,3 +111,4 @@ This section outlines the specific attributes intended for capture within each d
 - `week`
 - `user_address`
 - `xp`
+- `first_xp_timestamp`
