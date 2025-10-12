@@ -1,15 +1,19 @@
 {
-	"Version": "2012-10-17",
-	"Statement": [
-		{
-			"Sid": "AllowApiRateLimits",
-			"Effect": "Allow",
-			"Action": [
-				"dynamodb:GetItem",
-				"dynamodb:UpdateItem",
-				"dynamodb:PutItem"
-			],
-			"Resource": "arn:aws:dynamodb:*:*:table/api_rate_limits"
-		}
-	]
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "APIRateLimits",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:BatchGetItem",
+        "dynamodb:BatchWriteItem",
+        "dynamodb:PutItem",
+        "dynamodb:GetItem",
+        "dynamodb:Scan",
+        "dynamodb:Query",
+        "dynamodb:UpdateItem"
+      ],
+      "Resource": "arn:aws:dynamodb:*:*:table/api_rate_limits"
+    }
+  ]
 }
