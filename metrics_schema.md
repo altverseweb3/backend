@@ -14,13 +14,27 @@
 
 ---
 
-## Global Secondary Index (GSI)
+## Global Secondary Indexes (GSIs)
 
-This index is created on the same table to enable efficient querying of the leaderboard by score.
+To support efficient, sorted queries for both weekly and global leaderboards, two GSIs are used.
+
+### Weekly Leaderboard GSI
+
+This index allows for fetching a specific week's leaderboard, sorted by `xp` in descending order.
 
 | GSI Name | GSI Partition Key | GSI Sort Key |
 | :--- | :--- | :--- |
 | `leaderboard-by-xp-gsi` | `LEADERBOARD#{week}` | `xp` (Number) |
+
+---
+
+### Global Leaderboard GSI
+
+This index enables a global, all-time leaderboard by querying across all users. It indexes the `user_stats` items. 
+
+| GSI Name | GSI Partition Key | GSI Sort Key |
+| :--- | :--- | :--- |
+| `global-leaderboard-by-xp-gsi` | `leaderboard_scope` (String) | `total_xp` (Number) |
 
 ---
 
@@ -74,6 +88,7 @@ This section outlines the specific attributes intended for capture within each d
 - `total_swap_count`
 - `total_lending_count`
 - `total_earn_count`
+- `total_xp`
 - `first_active_timestamp`
 - `last_active_timestamp`
 

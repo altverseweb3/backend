@@ -11,6 +11,7 @@ dynamodb = boto3.resource("dynamodb")
 rate_limit_table = dynamodb.Table(
     os.environ.get("RATE_LIMIT_TABLE_NAME", "api_rate_limits")
 )
+metrics_table = dynamodb.Table(os.environ.get("METRICS_TABLE_NAME", "metrics"))
 
 # Rate limit configuration
 RATE_LIMIT = 5000  # Number of requests allowed in 5 minutes
@@ -18,6 +19,11 @@ BUCKET_DURATION = 300  # 5 minutes in seconds
 
 # Special key for tracking the last database reset
 RESET_TRACKER_KEY = "daily_reset_tracker"
+
+# ==============================================================================
+# CORE UTILITY & HELPER FUNCTIONS
+# General-purpose helpers used throughout the Lambda.
+# ==============================================================================
 
 
 def get_client_ip(event):
@@ -31,54 +37,77 @@ def get_client_ip(event):
     return "unknown"
 
 
-# Check for daily Reset IP credits
-def check_daily_reset():
+def get_time_periods(dt_object):
     """
-    Check if a new day has begun.
-    If so, purge the entire DynamoDB table (except for the tracker) and update the tracker.
+    Calculates the start dates for day, week, and month for a given datetime object.
+    It also returns the ISO week number for the leaderboard key.
     """
-    current_time = int(time.time())
-    current_date = datetime.fromtimestamp(current_time, tz=timezone.utc).date()
-    try:
-        response = rate_limit_table.get_item(Key={"ip_address": RESET_TRACKER_KEY})
-        if "Item" in response:
-            last_reset_time = int(response["Item"].get("last_reset_time", 0))
-            last_reset_date = datetime.fromtimestamp(
-                last_reset_time, tz=timezone.utc
-            ).date()
-            if current_date > last_reset_date:
-                perform_daily_reset(current_time)
-                return True
-        else:
-            # If no tracker exists, create one.
-            rate_limit_table.put_item(
-                Item={"ip_address": RESET_TRACKER_KEY, "last_reset_time": current_time}
-            )
-    except Exception as e:
-        print(f"Error in check_daily_reset: {str(e)}")
-    return False
+    # Ensure datetime is timezone-aware (UTC)
+    dt_object = dt_object.astimezone(timezone.utc)
+
+    # Daily: YYYY-MM-DD
+    daily_start = dt_object.strftime("%Y-%m-%d")
+
+    # Weekly (week starts on Monday): YYYY-MM-DD
+    weekly_start_dt = dt_object - timedelta(days=dt_object.weekday())
+    weekly_start = weekly_start_dt.strftime("%Y-%m-%d")
+
+    # Monthly: YYYY-MM-01
+    monthly_start = dt_object.strftime("%Y-%m-01")
+
+    # Leaderboard Week: YYYY-WW (e.g., 2025-42)
+    year, week_num, _ = dt_object.isocalendar()
+    leaderboard_week = f"{year}-{week_num}"
+
+    return {
+        "daily": daily_start,
+        "weekly": weekly_start,
+        "monthly": monthly_start,
+        "leaderboard_week": leaderboard_week,
+    }
 
 
-# Perform reset of credits
-def perform_daily_reset(current_time):
-    """
-    Purge all IP records (except the daily reset tracker) from the DynamoDB table.
-    """
+def is_new_user(user_address):
+    """Checks if a user_stats item exists for the given user address."""
     try:
-        response = rate_limit_table.scan(ProjectionExpression="ip_address")
-        with rate_limit_table.batch_writer() as batch:
-            for item in response.get("Items", []):
-                ip = item.get("ip_address")
-                if ip != RESET_TRACKER_KEY:
-                    batch.delete_item(Key={"ip_address": ip})
-        rate_limit_table.update_item(
-            Key={"ip_address": RESET_TRACKER_KEY},
-            UpdateExpression="SET last_reset_time = :time",
-            ExpressionAttributeValues={":time": current_time},
+        response = metrics_table.get_item(
+            Key={"PK": f"USER#{user_address}", "SK": "STATS"},
+            ProjectionExpression="PK",  # Only check for existence to save read capacity
         )
-        print("Daily reset completed successfully.")
-    except Exception as e:
-        print(f"Error in perform_daily_reset: {str(e)}")
+        return "Item" not in response
+    except ClientError as e:
+        print(f"Error checking for new user {user_address}: {e}")
+        # Fail safe: assume not a new user to prevent overcounting stats.
+        return False
+
+
+# Expected parameters:
+# - status_code: Integer HTTP status code
+# - body: Dictionary/object to be serialized to JSON
+# Response structure:
+# {
+#   "statusCode": number,
+#   "headers": {...},
+#   "body": "string" // JSON string
+# }
+def build_response(status_code, body):
+    return {
+        "statusCode": status_code,
+        "headers": {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "**",
+            "Access-Control-Allow-Methods": "ANY,OPTIONS,POST,GET",
+            "Content-Type": "application/json",
+        },
+        "body": json.dumps(body).encode("utf-8"),
+        "isBase64Encoded": True,
+    }
+
+
+# ==============================================================================
+# RATE LIMITING SYSTEM
+# All functions related to IP-based rate limiting and daily credit resets.
+# ==============================================================================
 
 
 # Check the rate limits for an IP address.
@@ -207,33 +236,6 @@ def build_rate_limit_response(bucket_info):
     )
     seconds_remaining = max(0, reset_time - current_time)
 
-    # Fail-safe: If reset time has already passed, reset the record and allow the request
-    if current_time > reset_time:
-        ip_address = bucket_info.get("ip_address", "unknown")
-        if ip_address != "unknown":
-            print(
-                f"Failsafe: Reset time ({reset_time}) has passed current time ({current_time}). Resetting record."
-            )
-
-            # This is a sanity check - if the time has passed,
-            # completely reset the record and allow the request
-            midnight = (datetime.now(timezone.utc) + timedelta(days=1)).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
-            ttl_timestamp = int(midnight.timestamp())
-
-            # Completely replace the record
-            rate_limit_table.put_item(
-                Item={
-                    "ip_address": ip_address,
-                    "credits": RATE_LIMIT,
-                    "last_replenish_time": current_time,
-                    "ttl": ttl_timestamp,
-                }
-            )
-            print(f"Record reset for {ip_address} - allowing request")
-            return None  # Return None to signal that the request should be allowed
-
     # Normal case: return 429 response
     return {
         "statusCode": 429,
@@ -261,9 +263,6 @@ def rate_limit(event, context):
     2. Check rate limits - if time has passed, completely reset the record
     3. If allowed, subtract one token; otherwise, return a 429 response
     """
-    # Check for daily database reset first
-    check_daily_reset()
-
     # Get the client IP
     ip_address = get_client_ip(event)
     if ip_address == "unknown":
@@ -314,6 +313,12 @@ def rate_limit(event, context):
 
     # 4. If we reach here, the request is allowed
     return
+
+
+# ==============================================================================
+# BLOCKCHAIN API HANDLERS (EVM & SOLANA)
+# Handlers for endpoints that interact with Alchemy for EVM and Solana data.
+# ==============================================================================
 
 
 # Expected event structure for /balances:
@@ -406,6 +411,133 @@ def handle_balances(event):
                 "tokenBalance": balance["tokenBalance"],
             }
             formatted_balances.append(token_info)
+
+        return build_response(200, formatted_balances)
+
+    except Exception as e:
+        return build_response(500, {"error": f"An error occurred: {str(e)}"})
+
+
+# Expected event structure for /spl-balances:
+# {
+#   "body": {
+#     "network": "string", // Required: Solana network name (e.g., "solana-mainnet")
+#     "userAddress": "string", // Required: Solana wallet address
+#     "programId": "string", // Optional: The SPL token program ID to filter by
+#     "mint": "string" // Optional: The SPL token mint address to filter by
+#   }
+# }
+# Response structure:
+# [
+#   {
+#     "pubkey": "string", // The token account address
+#     "mint": "string", // The token mint address
+#     "owner": "string", // The token account owner address
+#     "amount": "string", // Token amount
+#     "decimals": number, // Token decimals
+#     "uiAmount": number, // Token amount with decimals applied
+#     "uiAmountString": "string" // Token amount as a string with decimals applied
+#   }
+# ]
+# https://docs.alchemy.com/reference/solana-getTokenAccountsByOwner
+def handle_spl_balances(event):
+    try:
+        body = json.loads(event.get("body", "{}"))
+    except json.JSONDecodeError:
+        return build_response(400, {"error": "Invalid JSON body"})
+
+    network = body.get("network")
+    user_address = body.get("userAddress")
+    program_id = body.get("programId")
+    mint = body.get("mint")
+
+    if not network or not user_address:
+        return build_response(
+            400, {"error": "Missing required parameters: network and userAddress"}
+        )
+
+    try:
+        # Get native SOL balance first with getAccountInfo
+        native_params = [user_address, {"encoding": "jsonParsed"}]
+        native_response = call_alchemy(network, "getAccountInfo", native_params)
+
+        formatted_balances = []
+
+        # Process native SOL balance
+        if "result" in native_response and native_response["result"]["value"]:
+            account_info = native_response["result"]["value"]
+            native_balance = account_info["lamports"]
+
+            # Format native SOL similar to SPL tokens but mark it as native
+            native_token_info = {
+                "pubkey": "native",
+                "mint": "11111111111111111111111111111111",  # System Program address for native SOL
+                "owner": user_address,
+                "amount": str(native_balance),
+                "decimals": 9,  # SOL has 9 decimals
+                "uiAmount": native_balance / 10**9,  # Convert to SOL from lamports
+                "uiAmountString": str(native_balance / 10**9),
+                "isNative": True,
+            }
+            formatted_balances.append(native_token_info)
+        else:
+            print(f"Failed to retrieve native SOL balance: {native_response}")
+
+        # Build filter parameter based on provided parameters
+        filter_param = {}
+        if mint:
+            # If mint is provided, use it for filtering
+            filter_param = {"mint": mint}
+        elif program_id:
+            # Use programId if provided and mint is not
+            filter_param = {"programId": program_id}
+        else:
+            # Default to the SPL Token program ID if neither is specified
+            filter_param = {"programId": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"}
+
+        # Prepare parameters for the Alchemy API call
+        params = [user_address, filter_param, {"encoding": "jsonParsed"}]
+
+        # Call Solana getTokenAccountsByOwner method
+        alchemy_response = call_alchemy(network, "getTokenAccountsByOwner", params)
+
+        if "result" not in alchemy_response:
+            # If we have at least the native SOL balance, return that
+            if formatted_balances:
+                return build_response(200, formatted_balances)
+            return build_response(
+                500, {"error": "Failed to retrieve data from Alchemy API"}
+            )
+
+        token_accounts = alchemy_response["result"]["value"]
+
+        # Format the response to match our API structure
+        for account in token_accounts:
+            try:
+                # Extract parsed data
+                parsed_data = account["account"]["data"]["parsed"]["info"]
+                token_amount = parsed_data["tokenAmount"]
+
+                # Skip accounts with zero balance
+                if token_amount["amount"] == "0":
+                    continue
+
+                token_info = {
+                    "pubkey": account["pubkey"],
+                    "mint": parsed_data["mint"],
+                    "owner": parsed_data["owner"],
+                    "amount": token_amount["amount"],
+                    "decimals": token_amount["decimals"],
+                    "uiAmount": token_amount["uiAmount"],
+                    "uiAmountString": token_amount["uiAmountString"],
+                }
+                formatted_balances.append(token_info)
+            except (KeyError, TypeError) as e:
+                # Skip accounts with missing or malformed data
+                print(
+                    f"Error processing account {account.get('pubkey', 'unknown')}: {str(e)}"
+                )
+                continue
 
         return build_response(200, formatted_balances)
 
@@ -599,133 +731,6 @@ def handle_prices(event):
         return build_response(500, {"error": f"An error occurred: {str(e)}"})
 
 
-# Expected event structure for /spl-balances:
-# {
-#   "body": {
-#     "network": "string", // Required: Solana network name (e.g., "solana-mainnet")
-#     "userAddress": "string", // Required: Solana wallet address
-#     "programId": "string", // Optional: The SPL token program ID to filter by
-#     "mint": "string" // Optional: The SPL token mint address to filter by
-#   }
-# }
-# Response structure:
-# [
-#   {
-#     "pubkey": "string", // The token account address
-#     "mint": "string", // The token mint address
-#     "owner": "string", // The token account owner address
-#     "amount": "string", // Token amount
-#     "decimals": number, // Token decimals
-#     "uiAmount": number, // Token amount with decimals applied
-#     "uiAmountString": "string" // Token amount as a string with decimals applied
-#   }
-# ]
-# https://docs.alchemy.com/reference/solana-getTokenAccountsByOwner
-def handle_spl_balances(event):
-    try:
-        body = json.loads(event.get("body", "{}"))
-    except json.JSONDecodeError:
-        return build_response(400, {"error": "Invalid JSON body"})
-
-    network = body.get("network")
-    user_address = body.get("userAddress")
-    program_id = body.get("programId")
-    mint = body.get("mint")
-
-    if not network or not user_address:
-        return build_response(
-            400, {"error": "Missing required parameters: network and userAddress"}
-        )
-
-    try:
-        # Get native SOL balance first with getAccountInfo
-        native_params = [user_address, {"encoding": "jsonParsed"}]
-        native_response = call_alchemy(network, "getAccountInfo", native_params)
-
-        formatted_balances = []
-
-        # Process native SOL balance
-        if "result" in native_response and native_response["result"]["value"]:
-            account_info = native_response["result"]["value"]
-            native_balance = account_info["lamports"]
-
-            # Format native SOL similar to SPL tokens but mark it as native
-            native_token_info = {
-                "pubkey": "native",
-                "mint": "11111111111111111111111111111111",  # System Program address for native SOL
-                "owner": user_address,
-                "amount": str(native_balance),
-                "decimals": 9,  # SOL has 9 decimals
-                "uiAmount": native_balance / 10**9,  # Convert to SOL from lamports
-                "uiAmountString": str(native_balance / 10**9),
-                "isNative": True,
-            }
-            formatted_balances.append(native_token_info)
-        else:
-            print(f"Failed to retrieve native SOL balance: {native_response}")
-
-        # Build filter parameter based on provided parameters
-        filter_param = {}
-        if mint:
-            # If mint is provided, use it for filtering
-            filter_param = {"mint": mint}
-        elif program_id:
-            # Use programId if provided and mint is not
-            filter_param = {"programId": program_id}
-        else:
-            # Default to the SPL Token program ID if neither is specified
-            filter_param = {"programId": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"}
-
-        # Prepare parameters for the Alchemy API call
-        params = [user_address, filter_param, {"encoding": "jsonParsed"}]
-
-        # Call Solana getTokenAccountsByOwner method
-        alchemy_response = call_alchemy(network, "getTokenAccountsByOwner", params)
-
-        if "result" not in alchemy_response:
-            # If we have at least the native SOL balance, return that
-            if formatted_balances:
-                return build_response(200, formatted_balances)
-            return build_response(
-                500, {"error": "Failed to retrieve data from Alchemy API"}
-            )
-
-        token_accounts = alchemy_response["result"]["value"]
-
-        # Format the response to match our API structure
-        for account in token_accounts:
-            try:
-                # Extract parsed data
-                parsed_data = account["account"]["data"]["parsed"]["info"]
-                token_amount = parsed_data["tokenAmount"]
-
-                # Skip accounts with zero balance
-                if token_amount["amount"] == "0":
-                    continue
-
-                token_info = {
-                    "pubkey": account["pubkey"],
-                    "mint": parsed_data["mint"],
-                    "owner": parsed_data["owner"],
-                    "amount": token_amount["amount"],
-                    "decimals": token_amount["decimals"],
-                    "uiAmount": token_amount["uiAmount"],
-                    "uiAmountString": token_amount["uiAmountString"],
-                }
-                formatted_balances.append(token_info)
-            except (KeyError, TypeError) as e:
-                # Skip accounts with missing or malformed data
-                print(
-                    f"Error processing account {account.get('pubkey', 'unknown')}: {str(e)}"
-                )
-                continue
-
-        return build_response(200, formatted_balances)
-
-    except Exception as e:
-        return build_response(500, {"error": f"An error occurred: {str(e)}"})
-
-
 # Expected event structure for /sui/coin-metadata:
 # {
 #   "body": {
@@ -770,6 +775,12 @@ def handle_sui_coin_metadata(event):
 
     except Exception as e:
         return build_response(500, {"error": f"An error occurred: {str(e)}"})
+
+
+# ==============================================================================
+# BLOCKCHAIN API HANDLERS (SUI)
+# Handlers for endpoints that interact with the Sui RPC API.
+# ==============================================================================
 
 
 # Expected event structure for /sui/balance:
@@ -1010,6 +1021,12 @@ def handle_sui_coins(event):
         return build_response(500, {"error": f"An error occurred: {str(e)}"})
 
 
+# ==============================================================================
+# EXTERNAL API CALLERS
+# Functions responsible for making requests to third-party APIs.
+# ==============================================================================
+
+
 # Expected parameters:
 # - network: String, e.g., "eth-mainnet", "polygon-mainnet"
 # - method: String, Alchemy API method name
@@ -1051,27 +1068,479 @@ def call_sui_api(method, params):
     return response.json()
 
 
-# Expected parameters:
-# - status_code: Integer HTTP status code
-# - body: Dictionary/object to be serialized to JSON
-# Response structure:
+# ==============================================================================
+# INTERNAL METRICS SYSTEM
+# Functions for handling internal application metrics and user statistics.
+# ==============================================================================
+
+
+def metrics_process_entrance():
+    """Handles the logic for a DApp entrance event."""
+    try:
+        now = datetime.now(timezone.utc)
+        periods = get_time_periods(now)
+        period_keys = {
+            "daily": periods["daily"],
+            "weekly": periods["weekly"],
+            "monthly": periods["monthly"],
+        }
+
+        for period_type, start_date in period_keys.items():
+            metrics_table.update_item(
+                Key={"PK": f"STAT#{period_type}#{start_date}", "SK": "GENERAL"},
+                UpdateExpression="SET dapp_entrances = if_not_exists(dapp_entrances, :start) + :inc",
+                ExpressionAttributeValues={":inc": 1, ":start": 0},
+            )
+
+        return build_response(200, {"message": "Entrance recorded successfully"})
+    except ClientError as e:
+        print(f"Error in metrics_process_entrance: {e}")
+        return build_response(500, {"error": "Could not record entrance event"})
+
+
+def metrics_process_swap(payload, ip_address):
+    """Processes a swap payload to update all relevant metrics."""
+    try:
+        required = [
+            "user_address",
+            "tx_hash",
+            "timestamp",
+            "source_chain",
+            "destination_chain",
+        ]
+        if not all(field in payload for field in required):
+            return build_response(
+                400,
+                {
+                    "error": f"Swap payload missing one or more required fields: {required}"
+                },
+            )
+
+        user_address = payload["user_address"]
+        now_dt = datetime.now(timezone.utc)
+        now_ts_iso = now_dt.isoformat()
+
+        is_new = is_new_user(user_address)
+        periods = get_time_periods(now_dt)
+        transaction_items = []
+
+        # 1. Record Individual Swap
+        swap_item = payload.copy()
+        swap_item["PK"] = f"USER#{user_address}"
+        swap_item["SK"] = f"SWAP#{payload['timestamp']}#{payload['tx_hash']}"
+        transaction_items.append(
+            {"Put": {"TableName": metrics_table.name, "Item": swap_item}}
+        )
+
+        # 2. Update User Stats
+        xp_to_add = 50
+        user_stats_expr = (
+            "SET total_swap_count = if_not_exists(total_swap_count, :z) + :o, "
+            "last_active_timestamp = :ts, "
+            "total_xp = if_not_exists(total_xp, :z) + :xp_val, "
+            "leaderboard_scope = if_not_exists(leaderboard_scope, :scope)"
+        )
+        user_stats_vals = {
+            ":o": 1,
+            ":z": 0,
+            ":ts": now_ts_iso,
+            ":xp_val": xp_to_add,
+            ":scope": "GLOBAL",
+        }
+        if is_new:
+            user_stats_expr += ", first_active_timestamp = :ts, ip_address = :ip"
+            user_stats_vals[":ip"] = ip_address
+
+        transaction_items.append(
+            {
+                "Update": {
+                    "TableName": metrics_table.name,
+                    "Key": {"PK": f"USER#{user_address}", "SK": "STATS"},
+                    "UpdateExpression": user_stats_expr,
+                    "ExpressionAttributeValues": user_stats_vals,
+                }
+            }
+        )
+
+        # 3. & 4. Update Periodic Stats (General and Swap-Specific)
+        period_keys = {
+            "daily": periods["daily"],
+            "weekly": periods["weekly"],
+            "monthly": periods["monthly"],
+        }
+        for period_type, start_date in period_keys.items():
+            # General Stats
+            general_stats_expr = "SET swap_count = if_not_exists(swap_count, :z) + :o, active_users = if_not_exists(active_users, :z) + :o"
+            if is_new:
+                general_stats_expr += ", new_users = if_not_exists(new_users, :z) + :o"
+            transaction_items.append(
+                {
+                    "Update": {
+                        "TableName": metrics_table.name,
+                        "Key": {
+                            "PK": f"STAT#{period_type}#{start_date}",
+                            "SK": "GENERAL",
+                        },
+                        "UpdateExpression": general_stats_expr,
+                        "ExpressionAttributeValues": {":o": 1, ":z": 0},
+                    }
+                }
+            )
+            # Swap Stats
+            direction_sk = (
+                f"SWAP#{payload['source_chain']},{payload['destination_chain']}"
+            )
+            transaction_items.append(
+                {
+                    "Update": {
+                        "TableName": metrics_table.name,
+                        "Key": {
+                            "PK": f"STAT#{period_type}#{start_date}",
+                            "SK": direction_sk,
+                        },
+                        "UpdateExpression": "SET #c = if_not_exists(#c, :z) + :o",
+                        "ExpressionAttributeNames": {"#c": "count"},
+                        "ExpressionAttributeValues": {":o": 1, ":z": 0},
+                    }
+                }
+            )
+
+        # 5. Update Leaderboard
+        transaction_items.append(
+            {
+                "Update": {
+                    "TableName": metrics_table.name,
+                    "Key": {
+                        "PK": f'LEADERBOARD#{periods["leaderboard_week"]}',
+                        "SK": f"USER#{user_address}",
+                    },
+                    "UpdateExpression": "SET xp = if_not_exists(xp, :z) + :xp_val, first_xp_timestamp = if_not_exists(first_xp_timestamp, :ts)",
+                    "ExpressionAttributeValues": {
+                        ":xp_val": 50,
+                        ":z": 0,
+                        ":ts": now_ts_iso,
+                    },
+                }
+            }
+        )
+
+        dynamodb.meta.client.transact_write_items(TransactItems=transaction_items)
+        return build_response(200, {"message": "Swap event processed successfully"})
+
+    except ClientError as e:
+        print(
+            f"DynamoDB Transaction Error in metrics_process_swap: {e.response['Error']['Message']}"
+        )
+        return build_response(500, {"error": "Could not process swap transaction"})
+
+
+def metrics_process_lending(payload, ip_address):
+    """Processes a lending payload to update all relevant metrics."""
+    try:
+        required = ["user_address", "tx_hash", "timestamp", "chain", "market_name"]
+        if not all(field in payload for field in required):
+            return build_response(
+                400,
+                {
+                    "error": f"Lending payload missing one or more required fields: {required}"
+                },
+            )
+
+        user_address = payload["user_address"]
+        now_dt = datetime.now(timezone.utc)
+        now_ts_iso = now_dt.isoformat()
+
+        is_new = is_new_user(user_address)
+        periods = get_time_periods(now_dt)
+        transaction_items = []
+
+        # 1. Record Individual Lending Action
+        lending_item = payload.copy()
+        lending_item["PK"] = f"USER#{user_address}"
+        lending_item["SK"] = f"LEND#{payload['timestamp']}#{payload['tx_hash']}"
+        transaction_items.append(
+            {"Put": {"TableName": metrics_table.name, "Item": lending_item}}
+        )
+
+        # 2. Update User Stats
+        xp_to_add = 100
+        user_stats_expr = (
+            "SET total_lending_count = if_not_exists(total_lending_count, :z) + :o, "
+            "last_active_timestamp = :ts, "
+            "total_xp = if_not_exists(total_xp, :z) + :xp_val, "
+            "leaderboard_scope = if_not_exists(leaderboard_scope, :scope)"
+        )
+        user_stats_vals = {
+            ":o": 1,
+            ":z": 0,
+            ":ts": now_ts_iso,
+            ":xp_val": xp_to_add,
+            ":scope": "GLOBAL",
+        }
+        if is_new:
+            user_stats_expr += ", first_active_timestamp = :ts, ip_address = :ip"
+            user_stats_vals[":ip"] = ip_address
+
+        transaction_items.append(
+            {
+                "Update": {
+                    "TableName": metrics_table.name,
+                    "Key": {"PK": f"USER#{user_address}", "SK": "STATS"},
+                    "UpdateExpression": user_stats_expr,
+                    "ExpressionAttributeValues": user_stats_vals,
+                }
+            }
+        )
+
+        # 3. & 4. Update Periodic Stats
+        period_keys = {
+            "daily": periods["daily"],
+            "weekly": periods["weekly"],
+            "monthly": periods["monthly"],
+        }
+        for period_type, start_date in period_keys.items():
+            # General Stats
+            general_stats_expr = "SET lending_count = if_not_exists(lending_count, :z) + :o, active_users = if_not_exists(active_users, :z) + :o"
+            if is_new:
+                general_stats_expr += ", new_users = if_not_exists(new_users, :z) + :o"
+            transaction_items.append(
+                {
+                    "Update": {
+                        "TableName": metrics_table.name,
+                        "Key": {
+                            "PK": f"STAT#{period_type}#{start_date}",
+                            "SK": "GENERAL",
+                        },
+                        "UpdateExpression": general_stats_expr,
+                        "ExpressionAttributeValues": {":o": 1, ":z": 0},
+                    }
+                }
+            )
+            # Lending Stats
+            lending_sk = f"LENDING#{payload['chain']}#{payload['market_name']}"
+            transaction_items.append(
+                {
+                    "Update": {
+                        "TableName": metrics_table.name,
+                        "Key": {
+                            "PK": f"STAT#{period_type}#{start_date}",
+                            "SK": lending_sk,
+                        },
+                        "UpdateExpression": "SET #c = if_not_exists(#c, :z) + :o",
+                        "ExpressionAttributeNames": {"#c": "count"},
+                        "ExpressionAttributeValues": {":o": 1, ":z": 0},
+                    }
+                }
+            )
+
+        # 5. Update Leaderboard
+        transaction_items.append(
+            {
+                "Update": {
+                    "TableName": metrics_table.name,
+                    "Key": {
+                        "PK": f'LEADERBOARD#{periods["leaderboard_week"]}',
+                        "SK": f"USER#{user_address}",
+                    },
+                    "UpdateExpression": "SET xp = if_not_exists(xp, :z) + :xp_val, first_xp_timestamp = if_not_exists(first_xp_timestamp, :ts)",
+                    "ExpressionAttributeValues": {
+                        ":xp_val": 100,
+                        ":z": 0,
+                        ":ts": now_ts_iso,
+                    },
+                }
+            }
+        )
+
+        dynamodb.meta.client.transact_write_items(TransactItems=transaction_items)
+        return build_response(200, {"message": "Lending event processed successfully"})
+
+    except ClientError as e:
+        print(
+            f"DynamoDB Transaction Error in metrics_process_lending: {e.response['Error']['Message']}"
+        )
+        return build_response(500, {"error": "Could not process lending transaction"})
+
+
+def metrics_process_earn(payload, ip_address):
+    """Processes an earn payload to update all relevant metrics."""
+    try:
+        # Check for fields specific to an earn event
+        required = ["user_address", "tx_hash", "timestamp", "chain", "protocol"]
+        if not all(field in payload for field in required):
+            return build_response(
+                400,
+                {
+                    "error": f"Earn payload missing one or more required fields: {required}"
+                },
+            )
+
+        user_address = payload["user_address"]
+        now_dt = datetime.now(timezone.utc)
+        now_ts_iso = now_dt.isoformat()
+
+        # Pre-transaction checks
+        is_new = is_new_user(user_address)
+        periods = get_time_periods(now_dt)
+
+        transaction_items = []
+
+        # 1. Record Individual Earn Action
+        earn_item = payload.copy()
+        earn_item["PK"] = f"USER#{user_address}"
+        earn_item["SK"] = f"EARN#{payload['timestamp']}#{payload['tx_hash']}"
+        transaction_items.append(
+            {"Put": {"TableName": metrics_table.name, "Item": earn_item}}
+        )
+
+        # 2. Update User Stats
+        xp_to_add = 100
+        user_stats_expr = (
+            "SET total_earn_count = if_not_exists(total_earn_count, :z) + :o, "
+            "last_active_timestamp = :ts, "
+            "total_xp = if_not_exists(total_xp, :z) + :xp_val, "
+            "leaderboard_scope = if_not_exists(leaderboard_scope, :scope)"
+        )
+        user_stats_vals = {
+            ":o": 1,
+            ":z": 0,
+            ":ts": now_ts_iso,
+            ":xp_val": xp_to_add,
+            ":scope": "GLOBAL",
+        }
+        if is_new:
+            user_stats_expr += ", first_active_timestamp = :ts, ip_address = :ip"
+            user_stats_vals[":ip"] = ip_address
+
+        transaction_items.append(
+            {
+                "Update": {
+                    "TableName": metrics_table.name,
+                    "Key": {"PK": f"USER#{user_address}", "SK": "STATS"},
+                    "UpdateExpression": user_stats_expr,
+                    "ExpressionAttributeValues": user_stats_vals,
+                }
+            }
+        )
+
+        # 3. & 4. Update Periodic Stats (General and Earn-Specific)
+        period_keys = {
+            "daily": periods["daily"],
+            "weekly": periods["weekly"],
+            "monthly": periods["monthly"],
+        }
+        for period_type, start_date in period_keys.items():
+            # General Stats
+            general_stats_expr = "SET earn_count = if_not_exists(earn_count, :z) + :o, active_users = if_not_exists(active_users, :z) + :o"
+            if is_new:
+                general_stats_expr += ", new_users = if_not_exists(new_users, :z) + :o"
+            transaction_items.append(
+                {
+                    "Update": {
+                        "TableName": metrics_table.name,
+                        "Key": {
+                            "PK": f"STAT#{period_type}#{start_date}",
+                            "SK": "GENERAL",
+                        },
+                        "UpdateExpression": general_stats_expr,
+                        "ExpressionAttributeValues": {":o": 1, ":z": 0},
+                    }
+                }
+            )
+
+            # Periodic Earn Stats
+            earn_sk = f"EARN#{payload['chain']}#{payload['protocol']}"
+            transaction_items.append(
+                {
+                    "Update": {
+                        "TableName": metrics_table.name,
+                        "Key": {
+                            "PK": f"STAT#{period_type}#{start_date}",
+                            "SK": earn_sk,
+                        },
+                        "UpdateExpression": "SET #c = if_not_exists(#c, :z) + :o",
+                        "ExpressionAttributeNames": {"#c": "count"},
+                        "ExpressionAttributeValues": {":o": 1, ":z": 0},
+                    }
+                }
+            )
+
+        # 5. Update Leaderboard
+        transaction_items.append(
+            {
+                "Update": {
+                    "TableName": metrics_table.name,
+                    "Key": {
+                        "PK": f'LEADERBOARD#{periods["leaderboard_week"]}',
+                        "SK": f"USER#{user_address}",
+                    },
+                    "UpdateExpression": "SET xp = if_not_exists(xp, :z) + :xp_val, first_xp_timestamp = if_not_exists(first_xp_timestamp, :ts)",
+                    "ExpressionAttributeValues": {
+                        ":xp_val": 100,
+                        ":z": 0,
+                        ":ts": now_ts_iso,
+                    },
+                }
+            }
+        )
+
+        # Execute the entire transaction
+        dynamodb.meta.client.transact_write_items(TransactItems=transaction_items)
+        return build_response(200, {"message": "Earn event processed successfully"})
+
+    except ClientError as e:
+        print(
+            f"DynamoDB Transaction Error in metrics_process_earn: {e.response['Error']['Message']}"
+        )
+        return build_response(500, {"error": "Could not process earn transaction"})
+
+
+# Expected event body structure for the /metrics endpoint:
 # {
-#   "statusCode": number,
-#   "headers": {...},
-#   "body": "string" // JSON string
+#   "eventType": "entrance' | "swap" | "lending" | "earn",
+#   "payload": { ...event specific data... }
 # }
-def build_response(status_code, body):
-    return {
-        "statusCode": status_code,
-        "headers": {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "**",
-            "Access-Control-Allow-Methods": "ANY,OPTIONS,POST,GET",
-            "Content-Type": "application/json",
-        },
-        "body": json.dumps(body).encode("utf-8"),
-        "isBase64Encoded": True,
-    }
+# Note: "payload" is not required for "entrance" eventType.
+def handle_metrics(event):
+    """
+    Single endpoint to handle various metric events (swap, lend, earn, entrance).
+    Routes to the appropriate processor based on the 'eventType' in the request body.
+    """
+    try:
+        body = json.loads(event.get("body", "{}"))
+        event_type = body.get("eventType")
+        payload = body.get("payload", {})  # Default to empty dict if not present
+
+        if not event_type:
+            return build_response(
+                400, {"error": "Request body must include 'eventType'"}
+            )
+
+        # Extract client IP once for potential use in processors
+        ip_address = get_client_ip(event)
+
+        if event_type == "entrance":
+            return metrics_process_entrance()
+        elif event_type == "swap":
+            return metrics_process_swap(payload, ip_address)
+        elif event_type == "lending":
+            return metrics_process_lending(payload, ip_address)
+        elif event_type == "earn":
+            return metrics_process_earn(payload, ip_address)
+        else:
+            return build_response(400, {"error": f"Unknown eventType: '{event_type}'"})
+
+    except json.JSONDecodeError:
+        return build_response(400, {"error": "Invalid JSON body"})
+    except Exception as e:
+        print(f"An unexpected error occurred in handle_metrics: {str(e)}")
+        return build_response(500, {"error": "An internal server error occurred"})
+
+
+# ==============================================================================
+# LAMBDA HANDLER
+# The main entry point for the AWS Lambda function.
+# ==============================================================================
 
 
 # Expected event structure:
@@ -1140,5 +1609,9 @@ def lambda_handler(event, context):
     elif path == "/sui/coins" or path.endswith("/sui/coins"):
         if event["httpMethod"] == "POST":
             return handle_sui_coins(event)
+
+    elif path == "/metrics" or path.endswith("/metrics"):
+        if event["httpMethod"] == "POST":
+            return handle_metrics(event)
 
     return build_response(404, {"error": "Not found"})
