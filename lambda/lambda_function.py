@@ -1104,9 +1104,17 @@ def metrics_process_swap(payload, ip_address):
         required = [
             "user_address",
             "tx_hash",
-            "timestamp",
+            "protocol",
+            "swap_provider",
             "source_chain",
+            "source_token_address",
+            "source_token_symbol",
+            "amount_in",
             "destination_chain",
+            "destination_token_address",
+            "destination_token_symbol",
+            "amount_out",
+            "timestamp",
         ]
         if not all(field in payload for field in required):
             return build_response(
@@ -1237,7 +1245,18 @@ def metrics_process_swap(payload, ip_address):
 def metrics_process_lending(payload, ip_address):
     """Processes a lending payload to update all relevant metrics."""
     try:
-        required = ["user_address", "tx_hash", "timestamp", "chain", "market_name"]
+        required = [
+            "user_address",
+            "tx_hash",
+            "protocol",
+            "action",
+            "chain",
+            "market_name",
+            "token_address",
+            "token_symbol",
+            "amount",
+            "timestamp",
+        ]
         if not all(field in payload for field in required):
             return build_response(
                 400,
@@ -1366,7 +1385,19 @@ def metrics_process_earn(payload, ip_address):
     """Processes an earn payload to update all relevant metrics."""
     try:
         # Check for fields specific to an earn event
-        required = ["user_address", "tx_hash", "timestamp", "chain", "protocol"]
+        required = [
+            "user_address",
+            "tx_hash",
+            "protocol",
+            "action",
+            "chain",
+            "vault_name",
+            "vault_address",
+            "token_address",
+            "token_symbol",
+            "amount",
+            "timestamp",
+        ]
         if not all(field in payload for field in required):
             return build_response(
                 400,
