@@ -13,7 +13,10 @@
 				"dynamodb:Query",
 				"dynamodb:UpdateItem"
 			],
-			"Resource": "arn:aws:dynamodb:*:*:table/metrics"
+			"Resource": [
+				"arn:aws:dynamodb:*:*:table/metrics",
+				"arn:aws:dynamodb:*:*:table/metrics/index/*"
+			]
 		}
 	]
 }

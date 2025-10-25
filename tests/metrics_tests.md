@@ -24,7 +24,7 @@ This tests the full transactional update for a swap. It records the individual s
 {
   "path": "/metrics",
   "httpMethod": "POST",
-  "body": "{\"eventType\": \"swap\", \"payload\": {\"user_address\": \"0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045\", \"tx_hash\": \"0x123abc456def7890123abc456def7890123abc456def7890123abc456def7890\", \"protocol\": \"uniswap_v3\", \"swap_provider\": \"altverse_aggregator\", \"source_chain\": \"ethereum\", \"source_token_address\": \"0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2\", \"source_token_symbol\": \"WETH\", \"amount_in\": \"1000000000000000000\", \"destination_chain\": \"polygon\", \"destination_token_address\": \"0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270\", \"destination_token_symbol\": \"WMATIC\", \"amount_out\": \"1500000000000000000000\", \"timestamp\": 1729171516}}"
+  "body": "{\"eventType\": \"swap\", \"payload\": {\"user_address\": \"0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045\", \"tx_hash\": \"0x123abc456def7890123abc456def7890123abc456def7890123abc456def7890\", \"protocol\": \"uniswap_v3\", \"swap_provider\": \"altverse_aggregator\", \"source_chain\": \"ethereum\", \"source_token_address\": \"0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2\", \"source_token_symbol\": \"WETH\", \"amount_in\": \"1000000000000000000\", \"destination_chain\": \"polygon\", \"destination_token_address\": \"0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270\", \"destination_token_symbol\": \"WMATIC\", \"amount_out\": \"1500000000000000000000\", \"timestamp\": 1760972488}}"
 }
 ```
 
