@@ -1,0 +1,513 @@
+import json
+from datetime import datetime, timezone
+from botocore.exceptions import ClientError
+from ..config import dynamodb, metrics_table
+from ..utils.utils import build_response, get_time_periods, get_client_ip
+
+
+def is_new_user(user_address):
+    """Checks if a user_stats item exists for the given user address."""
+    try:
+        response = metrics_table.get_item(
+            Key={"PK": f"USER#{user_address}", "SK": "STATS"},
+            ProjectionExpression="PK",  # Only check for existence to save read capacity
+        )
+        return "Item" not in response
+    except ClientError as e:
+        print(f"Error checking for new user {user_address}: {e}")
+        # Fail safe: assume not a new user to prevent overcounting stats.
+        return False
+
+
+def process_entrance():
+    """Handles the logic for a DApp entrance event."""
+    try:
+        now = datetime.now(timezone.utc)
+        periods = get_time_periods(now)
+        period_keys = {
+            "daily": periods["daily"],
+            "weekly": periods["weekly"],
+            "monthly": periods["monthly"],
+        }
+
+        for period_type, start_date in period_keys.items():
+            metrics_table.update_item(
+                Key={"PK": f"STAT#{period_type}#{start_date}", "SK": "GENERAL"},
+                UpdateExpression="SET dapp_entrances = if_not_exists(dapp_entrances, :start) + :inc",
+                ExpressionAttributeValues={":inc": 1, ":start": 0},
+            )
+
+        return build_response(200, {"message": "Entrance recorded successfully"})
+    except ClientError as e:
+        print(f"Error in process_entrance: {e}")
+        return build_response(500, {"error": "Could not record entrance event"})
+
+
+def process_swap(payload, ip_address):
+    """Processes a swap payload to update all relevant metrics."""
+    try:
+        required = [
+            "user_address",
+            "tx_hash",
+            "protocol",
+            "swap_provider",
+            "source_chain",
+            "source_token_address",
+            "source_token_symbol",
+            "amount_in",
+            "destination_chain",
+            "destination_token_address",
+            "destination_token_symbol",
+            "amount_out",
+            "timestamp",
+        ]
+        if not all(field in payload for field in required):
+            return build_response(
+                400,
+                {
+                    "error": f"Swap payload missing one or more required fields: {required}"
+                },
+            )
+
+        user_address = payload["user_address"]
+        now_dt = datetime.now(timezone.utc)
+        now_ts_iso = now_dt.isoformat()
+
+        is_new = is_new_user(user_address)
+        periods = get_time_periods(now_dt)
+        transaction_items = []
+
+        # 1. Record Individual Swap
+        swap_item = payload.copy()
+        swap_item["PK"] = f"USER#{user_address}"
+        swap_item["SK"] = f"SWAP#{payload['timestamp']}#{payload['tx_hash']}"
+        transaction_items.append(
+            {"Put": {"TableName": metrics_table.name, "Item": swap_item}}
+        )
+
+        # 2. Update User Stats
+        xp_to_add = 50
+        user_stats_expr = (
+            "SET total_swap_count = if_not_exists(total_swap_count, :z) + :o, "
+            "last_active_timestamp = :ts, "
+            "total_xp = if_not_exists(total_xp, :z) + :xp_val, "
+            "leaderboard_scope = if_not_exists(leaderboard_scope, :scope)"
+        )
+        user_stats_vals = {
+            ":o": 1,
+            ":z": 0,
+            ":ts": now_ts_iso,
+            ":xp_val": xp_to_add,
+            ":scope": "GLOBAL",
+        }
+        if is_new:
+            user_stats_expr += ", first_active_timestamp = :ts, ip_address = :ip"
+            user_stats_vals[":ip"] = ip_address
+
+        transaction_items.append(
+            {
+                "Update": {
+                    "TableName": metrics_table.name,
+                    "Key": {"PK": f"USER#{user_address}", "SK": "STATS"},
+                    "UpdateExpression": user_stats_expr,
+                    "ExpressionAttributeValues": user_stats_vals,
+                }
+            }
+        )
+
+        # 3. & 4. Update Periodic Stats (General and Swap-Specific)
+        period_keys = {
+            "daily": periods["daily"],
+            "weekly": periods["weekly"],
+            "monthly": periods["monthly"],
+        }
+        for period_type, start_date in period_keys.items():
+            # General Stats
+            general_stats_expr = "SET swap_count = if_not_exists(swap_count, :z) + :o, active_users = if_not_exists(active_users, :z) + :o"
+            if is_new:
+                general_stats_expr += ", new_users = if_not_exists(new_users, :z) + :o"
+            transaction_items.append(
+                {
+                    "Update": {
+                        "TableName": metrics_table.name,
+                        "Key": {
+                            "PK": f"STAT#{period_type}#{start_date}",
+                            "SK": "GENERAL",
+                        },
+                        "UpdateExpression": general_stats_expr,
+                        "ExpressionAttributeValues": {":o": 1, ":z": 0},
+                    }
+                }
+            )
+            # Swap Stats
+            direction_sk = (
+                f"SWAP#{payload['source_chain']},{payload['destination_chain']}"
+            )
+            transaction_items.append(
+                {
+                    "Update": {
+                        "TableName": metrics_table.name,
+                        "Key": {
+                            "PK": f"STAT#{period_type}#{start_date}",
+                            "SK": direction_sk,
+                        },
+                        "UpdateExpression": "SET #c = if_not_exists(#c, :z) + :o",
+                        "ExpressionAttributeNames": {"#c": "count"},
+                        "ExpressionAttributeValues": {":o": 1, ":z": 0},
+                    }
+                }
+            )
+
+        # 5. Update Leaderboard
+        transaction_items.append(
+            {
+                "Update": {
+                    "TableName": metrics_table.name,
+                    "Key": {
+                        "PK": f'LEADERBOARD#{periods["leaderboard_week"]}',
+                        "SK": f"USER#{user_address}",
+                    },
+                    "UpdateExpression": "SET xp = if_not_exists(xp, :z) + :xp_val, first_xp_timestamp = if_not_exists(first_xp_timestamp, :ts)",
+                    "ExpressionAttributeValues": {
+                        ":xp_val": 50,
+                        ":z": 0,
+                        ":ts": now_ts_iso,
+                    },
+                }
+            }
+        )
+
+        dynamodb.meta.client.transact_write_items(TransactItems=transaction_items)
+        return build_response(200, {"message": "Swap event processed successfully"})
+
+    except ClientError as e:
+        print(
+            f"DynamoDB Transaction Error in process_swap: {e.response['Error']['Message']}"
+        )
+        return build_response(500, {"error": "Could not process swap transaction"})
+
+
+def process_lending(payload, ip_address):
+    """Processes a lending payload to update all relevant metrics."""
+    try:
+        required = [
+            "user_address",
+            "tx_hash",
+            "protocol",
+            "action",
+            "chain",
+            "market_name",
+            "token_address",
+            "token_symbol",
+            "amount",
+            "timestamp",
+        ]
+        if not all(field in payload for field in required):
+            return build_response(
+                400,
+                {
+                    "error": f"Lending payload missing one or more required fields: {required}"
+                },
+            )
+
+        user_address = payload["user_address"]
+        now_dt = datetime.now(timezone.utc)
+        now_ts_iso = now_dt.isoformat()
+
+        is_new = is_new_user(user_address)
+        periods = get_time_periods(now_dt)
+        transaction_items = []
+
+        # 1. Record Individual Lending Action
+        lending_item = payload.copy()
+        lending_item["PK"] = f"USER#{user_address}"
+        lending_item["SK"] = f"LEND#{payload['timestamp']}#{payload['tx_hash']}"
+        transaction_items.append(
+            {"Put": {"TableName": metrics_table.name, "Item": lending_item}}
+        )
+
+        # 2. Update User Stats
+        xp_to_add = 100
+        user_stats_expr = (
+            "SET total_lending_count = if_not_exists(total_lending_count, :z) + :o, "
+            "last_active_timestamp = :ts, "
+            "total_xp = if_not_exists(total_xp, :z) + :xp_val, "
+            "leaderboard_scope = if_not_exists(leaderboard_scope, :scope)"
+        )
+        user_stats_vals = {
+            ":o": 1,
+            ":z": 0,
+            ":ts": now_ts_iso,
+            ":xp_val": xp_to_add,
+            ":scope": "GLOBAL",
+        }
+        if is_new:
+            user_stats_expr += ", first_active_timestamp = :ts, ip_address = :ip"
+            user_stats_vals[":ip"] = ip_address
+
+        transaction_items.append(
+            {
+                "Update": {
+                    "TableName": metrics_table.name,
+                    "Key": {"PK": f"USER#{user_address}", "SK": "STATS"},
+                    "UpdateExpression": user_stats_expr,
+                    "ExpressionAttributeValues": user_stats_vals,
+                }
+            }
+        )
+
+        # 3. & 4. Update Periodic Stats
+        period_keys = {
+            "daily": periods["daily"],
+            "weekly": periods["weekly"],
+            "monthly": periods["monthly"],
+        }
+        for period_type, start_date in period_keys.items():
+            # General Stats
+            general_stats_expr = "SET lending_count = if_not_exists(lending_count, :z) + :o, active_users = if_not_exists(active_users, :z) + :o"
+            if is_new:
+                general_stats_expr += ", new_users = if_not_exists(new_users, :z) + :o"
+            transaction_items.append(
+                {
+                    "Update": {
+                        "TableName": metrics_table.name,
+                        "Key": {
+                            "PK": f"STAT#{period_type}#{start_date}",
+                            "SK": "GENERAL",
+                        },
+                        "UpdateExpression": general_stats_expr,
+                        "ExpressionAttributeValues": {":o": 1, ":z": 0},
+                    }
+                }
+            )
+            # Lending Stats
+            lending_sk = f"LENDING#{payload['chain']}#{payload['market_name']}"
+            transaction_items.append(
+                {
+                    "Update": {
+                        "TableName": metrics_table.name,
+                        "Key": {
+                            "PK": f"STAT#{period_type}#{start_date}",
+                            "SK": lending_sk,
+                        },
+                        "UpdateExpression": "SET #c = if_not_exists(#c, :z) + :o",
+                        "ExpressionAttributeNames": {"#c": "count"},
+                        "ExpressionAttributeValues": {":o": 1, ":z": 0},
+                    }
+                }
+            )
+
+        # 5. Update Leaderboard
+        transaction_items.append(
+            {
+                "Update": {
+                    "TableName": metrics_table.name,
+                    "Key": {
+                        "PK": f'LEADERBOARD#{periods["leaderboard_week"]}',
+                        "SK": f"USER#{user_address}",
+                    },
+                    "UpdateExpression": "SET xp = if_not_exists(xp, :z) + :xp_val, first_xp_timestamp = if_not_exists(first_xp_timestamp, :ts)",
+                    "ExpressionAttributeValues": {
+                        ":xp_val": 100,
+                        ":z": 0,
+                        ":ts": now_ts_iso,
+                    },
+                }
+            }
+        )
+
+        dynamodb.meta.client.transact_write_items(TransactItems=transaction_items)
+        return build_response(200, {"message": "Lending event processed successfully"})
+
+    except ClientError as e:
+        print(
+            f"DynamoDB Transaction Error in process_lending: {e.response['Error']['Message']}"
+        )
+        return build_response(500, {"error": "Could not process lending transaction"})
+
+
+def process_earn(payload, ip_address):
+    """Processes an earn payload to update all relevant metrics."""
+    try:
+        # Check for fields specific to an earn event
+        required = [
+            "user_address",
+            "tx_hash",
+            "protocol",
+            "action",
+            "chain",
+            "vault_name",
+            "vault_address",
+            "token_address",
+            "token_symbol",
+            "amount",
+            "timestamp",
+        ]
+        if not all(field in payload for field in required):
+            return build_response(
+                400,
+                {
+                    "error": f"Earn payload missing one or more required fields: {required}"
+                },
+            )
+
+        user_address = payload["user_address"]
+        now_dt = datetime.now(timezone.utc)
+        now_ts_iso = now_dt.isoformat()
+
+        # Pre-transaction checks
+        is_new = is_new_user(user_address)
+        periods = get_time_periods(now_dt)
+
+        transaction_items = []
+
+        # 1. Record Individual Earn Action
+        earn_item = payload.copy()
+        earn_item["PK"] = f"USER#{user_address}"
+        earn_item["SK"] = f"EARN#{payload['timestamp']}#{payload['tx_hash']}"
+        transaction_items.append(
+            {"Put": {"TableName": metrics_table.name, "Item": earn_item}}
+        )
+
+        # 2. Update User Stats
+        xp_to_add = 100
+        user_stats_expr = (
+            "SET total_earn_count = if_not_exists(total_earn_count, :z) + :o, "
+            "last_active_timestamp = :ts, "
+            "total_xp = if_not_exists(total_xp, :z) + :xp_val, "
+            "leaderboard_scope = if_not_exists(leaderboard_scope, :scope)"
+        )
+        user_stats_vals = {
+            ":o": 1,
+            ":z": 0,
+            ":ts": now_ts_iso,
+            ":xp_val": xp_to_add,
+            ":scope": "GLOBAL",
+        }
+        if is_new:
+            user_stats_expr += ", first_active_timestamp = :ts, ip_address = :ip"
+            user_stats_vals[":ip"] = ip_address
+
+        transaction_items.append(
+            {
+                "Update": {
+                    "TableName": metrics_table.name,
+                    "Key": {"PK": f"USER#{user_address}", "SK": "STATS"},
+                    "UpdateExpression": user_stats_expr,
+                    "ExpressionAttributeValues": user_stats_vals,
+                }
+            }
+        )
+
+        # 3. & 4. Update Periodic Stats (General and Earn-Specific)
+        period_keys = {
+            "daily": periods["daily"],
+            "weekly": periods["weekly"],
+            "monthly": periods["monthly"],
+        }
+        for period_type, start_date in period_keys.items():
+            # General Stats
+            general_stats_expr = "SET earn_count = if_not_exists(earn_count, :z) + :o, active_users = if_not_exists(active_users, :z) + :o"
+            if is_new:
+                general_stats_expr += ", new_users = if_not_exists(new_users, :z) + :o"
+            transaction_items.append(
+                {
+                    "Update": {
+                        "TableName": metrics_table.name,
+                        "Key": {
+                            "PK": f"STAT#{period_type}#{start_date}",
+                            "SK": "GENERAL",
+                        },
+                        "UpdateExpression": general_stats_expr,
+                        "ExpressionAttributeValues": {":o": 1, ":z": 0},
+                    }
+                }
+            )
+
+            # Periodic Earn Stats
+            earn_sk = f"EARN#{payload['chain']}#{payload['protocol']}"
+            transaction_items.append(
+                {
+                    "Update": {
+                        "TableName": metrics_table.name,
+                        "Key": {
+                            "PK": f"STAT#{period_type}#{start_date}",
+                            "SK": earn_sk,
+                        },
+                        "UpdateExpression": "SET #c = if_not_exists(#c, :z) + :o",
+                        "ExpressionAttributeNames": {"#c": "count"},
+                        "ExpressionAttributeValues": {":o": 1, ":z": 0},
+                    }
+                }
+            )
+
+        # 5. Update Leaderboard
+        transaction_items.append(
+            {
+                "Update": {
+                    "TableName": metrics_table.name,
+                    "Key": {
+                        "PK": f'LEADERBOARD#{periods["leaderboard_week"]}',
+                        "SK": f"USER#{user_address}",
+                    },
+                    "UpdateExpression": "SET xp = if_not_exists(xp, :z) + :xp_val, first_xp_timestamp = if_not_exists(first_xp_timestamp, :ts)",
+                    "ExpressionAttributeValues": {
+                        ":xp_val": 100,
+                        ":z": 0,
+                        ":ts": now_ts_iso,
+                    },
+                }
+            }
+        )
+
+        # Execute the entire transaction
+        dynamodb.meta.client.transact_write_items(TransactItems=transaction_items)
+        return build_response(200, {"message": "Earn event processed successfully"})
+
+    except ClientError as e:
+        print(
+            f"DynamoDB Transaction Error in process_earn: {e.response['Error']['Message']}"
+        )
+        return build_response(500, {"error": "Could not process earn transaction"})
+
+
+# Expected event body structure for the /metrics endpoint:
+# {
+#   "eventType": "entrance' | "swap" | "lending" | "earn",
+#   "payload": { ...event specific data... }
+# }
+# Note: "payload" is not required for "entrance" eventType.
+def handle(event):
+    """
+    Single endpoint to handle various metric events (swap, lend, earn, entrance).
+    Routes to the appropriate processor based on the 'eventType' in the request body.
+    """
+    try:
+        body = json.loads(event.get("body", "{}"))
+        event_type = body.get("eventType")
+        payload = body.get("payload", {})  # Default to empty dict if not present
+
+        if not event_type:
+            return build_response(
+                400, {"error": "Request body must include 'eventType'"}
+            )
+
+        # Extract client IP once for potential use in processors
+        ip_address = get_client_ip(event)
+
+        if event_type == "entrance":
+            return process_entrance()
+        elif event_type == "swap":
+            return process_swap(payload, ip_address)
+        elif event_type == "lending":
+            return process_lending(payload, ip_address)
+        elif event_type == "earn":
+            return process_earn(payload, ip_address)
+        else:
+            return build_response(400, {"error": f"Unknown eventType: '{event_type}'"})
+
+    except json.JSONDecodeError:
+        return build_response(400, {"error": "Invalid JSON body"})
+    except Exception as e:
+        print(f"An unexpected error occurred in handle_metrics: {str(e)}")
+        return build_response(500, {"error": "An internal server error occurred"})

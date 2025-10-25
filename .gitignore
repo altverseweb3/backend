@@ -1,4 +1,6 @@
 lambda/lambda_function.zip
+lambda/.python-version
 
 # env files (can opt-in for committing if needed)
 .env*
+
