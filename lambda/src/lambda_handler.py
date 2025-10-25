@@ -1,7 +1,8 @@
 import json
 from .utils.rate_limitter import rate_limit
 from .utils.utils import build_response
-from .endpoints import evm, solana, sui, prices, metrics, analytics
+from .endpoints import evm, solana, sui, prices, metrics
+from .endpoints.analytics import handler as analytics_handler
 
 
 def lambda_handler(event, context):
@@ -86,7 +87,7 @@ def lambda_handler(event, context):
 
     elif path == "/analytics" or path.endswith("/analytics"):
         if event["httpMethod"] == "POST":
-            return analytics.handle(event)
+            return analytics_handler.handle(event)
 
     # 404 Not Found
     return build_response(404, {"error": "Not found"})
