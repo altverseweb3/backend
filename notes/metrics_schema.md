@@ -16,7 +16,7 @@
 
 ## Global Secondary Indexes (GSIs)
 
-To support efficient, sorted queries for both weekly and global leaderboards, two GSIs are used.
+To support efficient, sorted queries for weekly/global leaderboards and offline analytics.
 
 ### Weekly Leaderboard GSI
 
@@ -30,11 +30,21 @@ This index allows for fetching a specific week's leaderboard, sorted by `xp` in 
 
 ### Global Leaderboard GSI
 
-This index enables a global, all-time leaderboard by querying across all users. It indexes the `user_stats` items. 
+This index enables a global, all-time leaderboard by querying across all users. It indexes the `user_stats` items.
 
 | GSI Name | GSI Partition Key | GSI Sort Key |
 | :--- | :--- | :--- |
 | `global-leaderboard-by-xp-gsi` | `leaderboard_scope` (String) | `total_xp` (Number) |
+
+---
+
+### Transaction Time-Series GSI
+
+This index enables efficient queries for offline analytics jobs (e.g., "fetch all lending transactions from the last 24 hours"). It indexes *only* the `swap`, `lending`, and `earn` items.
+
+| GSI Name | GSI Partition Key | GSI Sort Key |
+| :--- | :--- | :--- |
+| `transactions-by-time-gsi` | `tx_type` (String) | `timestamp` (String) |
 
 ---
 
@@ -56,6 +66,7 @@ This section outlines the specific attributes intended for capture within each d
 - `destination_token_symbol`
 - `amount_out`
 - `timestamp`
+- `tx_type` 
 
 ### Lending
 - `user_address`
@@ -68,6 +79,7 @@ This section outlines the specific attributes intended for capture within each d
 - `token_symbol`
 - `amount`
 - `timestamp`
+- `tx_type`
 
 ### Earn
 - `user_address`
@@ -81,6 +93,7 @@ This section outlines the specific attributes intended for capture within each d
 - `token_symbol`
 - `amount`
 - `timestamp`
+- `tx_type`
 
 ### User Stats
 - `user_address`
