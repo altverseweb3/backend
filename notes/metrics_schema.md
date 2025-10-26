@@ -106,37 +106,39 @@ This section outlines the specific attributes intended for capture within each d
 - `last_active_timestamp`
 
 ### Periodic General Stats
-- `period_start_date`
-- `period_type`
-- `swap_count`
-- `lending_count`
-- `earn_count`
-- `dapp_entrances`
-- `active_users`
-- `new_users`
+This item captures both periodic (daily, weekly, monthly) and global (all-time) metrics. The context is determined by the `PK` (`STAT#{period_type}#{period_start_date}`).
+
+- `period_start_date`: (e.g., `2023-10-27`, `2023-W43`, or `ALL`)
+- `period_type`: (e.g., `daily`, `weekly`, `monthly`, `all`)
+- `swap_count`: The count of swaps. (For `period_type=all`, this is the all-time total).
+- `lending_count`: The count of lending actions. (For `period_type=all`, this is the all-time total).
+- `earn_count`: The count of earn actions. (For `period_type=all`, this is the all-time total).
+- `dapp_entrances`: The count of entrances. (For `period_type=all`, this is the all-time total).
+- `active_users`: The count of unique active users for the period. (Not applicable for `period_type=all`).
+- `new_users`: The count of new users for the period. (For `period_type=all`, this represents the all-time total unique users).
 
 ### Periodic Swap Stats
-- `period_start_date`
-- `period_type`
-- `direction`
-- `count`
+- `period_start_date`: (e.g., `2023-10-27`, `2023-W43`, or `ALL`)
+- `period_type`: (e.g., `daily`, `weekly`, `monthly`, `all`)
+- `direction`: A string representing the source and destination chains (e.g., `ETH,ARB` or `BSC,BSC`).
+- `count`: The total count of swaps for this direction and period.
 
 ### Periodic Lending Stats
-- `period_start_date`
-- `period_type`
+- `period_start_date`: (e.g., `2023-10-27`, `2023-W43`, or `ALL`)
+- `period_type`: (e.g., `daily`, `weekly`, `monthly`, `all`)
 - `chain`
 - `market_name`
-- `count`
+- `count`: The total count of lending actions for this market and period.
 
 ### Periodic Earn Stats
-- `period_start_date`
-- `period_type`
+- `period_start_date`: (e.g., `2023-10-27`, `2023-W43`, or `ALL`)
+- `period_type`: (e.g., `daily`, `weekly`, `monthly`, `all`)
 - `chain`
 - `protocol`
-- `count`
+- `count`: The total count of earn actions for this protocol and period.
 
 ### Leaderboard
-- `week`
+- `week`: (e.g., `2023-W43`)
 - `user_address`
 - `xp`
 - `first_xp_timestamp`
