@@ -1,34 +1,39 @@
-## Captured Analytics
+### Captured Analytics (Real-time)
 
-| Metric Category | Metric Name | Description / Calculation (Based on your Schema) | Suggested Chart Type |
+This list includes metrics that can be pulled **instantly** from aggregated `STAT` items, making them suitable for a fast-loading public dashboard. The 'Description' column details the efficient query pattern.
+
+| Metric Category | Metric Name | Description / Calculation (Based on Schema) | Chart Type |
 | :--- | :--- | :--- | :--- |
-| **User & Audience** | Total Users | `COUNT` of all `user_stats` items. | **KPI Scorecard** (Big Number) |
-| **User & Audience** | New Users (Time-series) | `COUNT` of `user_stats` items, grouped by `first_active_timestamp` (Daily, Weekly, Monthly). | **Line Chart** or **Bar Chart** |
-| **User & Audience** | Active Users (DAU/WAU/MAU) | `COUNT` of unique users with any event (`swap`, `lending`, `earn`, `entrance`) in the period. | **Line Chart** |
-| **User & Audience** | User Segmentation | Breakdown of users by `total_swap_count > 0` vs. `total_lending_count > 0` vs. `total_earn_count > 0`. | **Venn Diagram** or **Donut Chart** |
-| **Overall Activity** | Total Transactions | `SUM` of all `swap`, `lending`, and `earn` items. | **KPI Scorecard** (Big Number) |
-| **Overall Activity** | Transaction Volume (Time-series) | `COUNT` of all transactions (`swap`, `lending`, `earn`) per day/week/month. | **Line Chart** or **Bar Chart** |
-| **Overall Activity** | Activity Breakdown | Stacked bar chart (one bar per day/week) showing `swap_count`, `lending_count`, and `earn_count`. | **Stacked Bar Chart** |
-| **Overall Activity** | dApp Entrances (Time-series) | `COUNT` of `entrance` events, grouped by day, week, and month. | **Line Chart** or **Bar Chart** |
-| **Overall Activity** | Transactions per Active User | `Total Transactions` in period / `Active Users` in period. | **Line Chart** or **KPI Scorecard** |
-| **Swap Metrics** | Total Swap Count | `COUNT` of all `swap` items. | **KPI Scorecard** (Big Number) |
-| **Swap Metrics** | Swap Pair Breakdown | `COUNT` for each `source_token_symbol` -> `destination_token_symbol` combination. | **Bar Chart** or **Donut Chart** (Top 5 + "Other") |
-| **Swap Metrics** | Swap Routes (Chains) Breakdown | `COUNT` for each `source_chain` -> `destination_chain` combination. | **Bar Chart** or **Sankey Diagram** |
-| **Swap Metrics** | Cross-Chain vs. Same-Chain | `%` of swaps where `source_chain != destination_chain`. | **Donut Chart** or **100% Stacked Bar** |
-| **Lending Metrics** | Lending Action Breakdown | `COUNT` of lending actions, grouped by `action` (`deposit`, `withdraw`, `borrow`, `repay`). | **Donut Chart** or **Bar Chart** |
-| **Lending Metrics** | Lending Market Breakdown | `COUNT` of transactions for each `market_name`. | **Bar Chart** or **Donut Chart** (Top 5 + "Other") |
-| **Lending Metrics** | Popular Lending Chains | `COUNT` grouped by `chain`. | **Donut Chart** or **Bar Chart** |
-| **Lending Metrics** | Lending Assets Breakdown | `COUNT` of transactions for each `token_symbol`. | **Bar Chart** or **Donut Chart** (Top 5 + "Other") |
-| **Earn Metrics** | Earn Action Breakdown | `COUNT` of earn actions, grouped by `action` (`stake`, `unstake`, `claim`). | **Donut Chart** or **Bar Chart** |
-| **Earn Metrics** | Popular Earn Protocols | `COUNT` grouped by `protocol`. | **Donut Chart** or **Bar Chart** |
-| **Earn Metrics** | Popular Earn Chains | `COUNT` grouped by `chain`. | **Donut Chart** or **Bar Chart** |
-| **Earn Metrics** | Vault Breakdown | `COUNT` of transactions for each `vault_name`. | **Bar Chart** or **Donut Chart** (Top 5 + "Other") |
-| **Leaderboard Displays** | Weekly Leaderboard | A view of the `leaderboard-by-xp-gsi` for the current `week`, sorted by `xp` (DESC). | **Table** |
-| **Leaderboard Displays** | Global Leaderboard | A view of the `global-leaderboard-by-xp-gsi`, sorted by `total_xp` (DESC). | **Table** |
+| **User & Audience** | **Total Users** | `Get` `STAT#all#ALL` item. <br> Read the **`new_users`** attribute. | KPI Scorecard |
+| **User & Audience** | New Users (Time-series) | `Get` `STAT#{period}#GENERAL` item. <br> Read the **`new_users`** attribute. | Line/Bar Chart |
+| **User & Audience** | Active Users (DAU/WAU/MAU) | `Get` `STAT#{period}#GENERAL` item. <br> Read the **`active_users`** attribute. | Line Chart |
+| **Overall Activity** | **Total Transactions** | `Get` `STAT#all#ALL` item. <br> Calculate **`swap_count + lending_count + earn_count`**. | KPI Scorecard |
+| **Overall Activity** | Transaction Volume (Time-series) | `Get` `STAT#{period}#GENERAL` item. <br> Calculate **`swap_count + lending_count + earn_count`**. | Line/Bar Chart |
+| **Overall Activity** | Activity Breakdown (Time-series) | `Get` `STAT#{period}#GENERAL` item. <br> Read **`swap_count`**, **`lending_count`**, and **`earn_count`** attributes. | Stacked Bar Chart |
+| **Overall Activity** | dApp Entrances (Time-series) | `Get` `STAT#{period}#GENERAL` item. <br> Read the **`dapp_entrances`** attribute. | Line/Bar Chart |
+| **Overall Activity** | Transactions per Active User | `Get` `STAT#{period}#GENERAL` item. <br> Calculate **`(swap_count + lending_count + earn_count) / active_users`**. | Line Chart / KPI |
+| **Swap Metrics** | **Total Swap Count** | `Get` `STAT#all#ALL` item. <br> Read the **`swap_count`** attribute. | KPI Scorecard |
+| **Swap Metrics** | Swap Routes (Chains) Breakdown | `Query` `PK = STAT#{period}` and `SK starts_with "SWAP#"`. <br> Aggregate results from all `periodic_swap_stats` items. | Sankey Diagram / Bar Chart |
+| **Swap Metrics** | Cross-Chain vs. Same-Chain | `Query` `PK = STAT#{period}` and `SK starts_with "SWAP#"`. <br> Backend logic parses the `SK` (`SWAP#{source}#{dest}`) to sum `count` for `source != dest` vs. `source == dest`. | Donut Chart |
+| **Lending Metrics** | **Total Lending Count** | `Get` `STAT#all#ALL` item. <br> Read the **`lending_count`** attribute. | KPI Scorecard |
+| **Lending Metrics** | Lending Market/Chain Breakdown | `Query` `PK = STAT#{period}` and `SK starts_with "LENDING#"`. <br> Backend logic parses the `SK` (`LENDING#{chain}#{market}`) to aggregate `count` by chain or market. | Bar Chart / Donut Chart |
+| **Earn Metrics** | **Total Earn Count** | `Get` `STAT#all#ALL` item. <br> Read the **`earn_count`** attribute. | KPI Scorecard |
+| **Earn Metrics** | Earn Protocol/Chain Breakdown | `Query` `PK = STAT#{period}` and `SK starts_with "EARN#"`. <br> Backend logic parses the `SK` (`EARN#{chain}#{protocol}`) to aggregate `count` by chain or protocol. | Bar Chart / Donut Chart |
+| **Leaderboard** | Weekly Leaderboard | `Query` the **`leaderboard-by-xp-gsi`** with `PK = LEADERBOARD#{current_week}`. | Table |
+| **Leaderboard** | Global Leaderboard | `Query` the **`global-leaderboard-by-xp-gsi`** with `PK = "GLOBAL"`. | Table |
 
-## Expensive Exclusions
+-----
 
-| Metric Category | Metric Name | Description / Calculation (Based on your Schema) | Suggested Chart Type |
-| :--- | :--- | :--- | :--- |
-| **User & Audience** | New User Growth Rate | `(New Users this Period / Total Users last Period) * 100%`. | **Line Chart** or **KPI Scorecard** |
-| **User & Audience** | Retention Cohorts | `%` of new users from "Week 1" who returned in "Week 2", "Week 3", etc. | **Heatmap Table** (Cohort Table) |
+### Expensive / Offline Analytics
+
+This list includes metrics that **cannot** be answered by the real-time `STAT` items. They require full scans, GSI queries, or post-processing (e.g., with AWS Glue, Athena, or a batch Lambda) on the raw transaction data.
+
+| Metric Category | Metric Name | Reason for Offline Calculation |
+| :--- | :--- | :--- |
+| **User & Audience** | New User Growth Rate | Depends on "Total Users" (real-time) and periodic `new_users`, but calculation is typically done offline. |
+| **User & Audience** | Retention Cohorts | Requires finding users by `first_active_timestamp` and then checking their activity in subsequent periods. |
+| **Swap Metrics** | Swap Pair Breakdown (Tokens) | The `periodic_swap_stats` item is keyed by *chain*, not by `source_token_symbol` or `destination_token_symbol`. This requires querying the raw `swap` items. |
+| **Lending Metrics** | Lending Action Breakdown | The `periodic_lending_stats` item is keyed by `chain` and `market_name`, not by `action` (deposit, borrow, etc.). This requires querying the raw `lending` items. |
+| **Lending Metrics** | Lending Assets Breakdown | The `periodic_lending_stats` item does not include `token_symbol`. This requires querying the raw `lending` items. |
+| **Earn Metrics** | Earn Action Breakdown | The `periodic_earn_stats` item is keyed by `chain` and `protocol`, not by `action` (stake, unstake, etc.). This requires querying the raw `earn` items. |
+| **Earn Metrics** | Vault Breakdown | The `periodic_earn_stats` item does not include `vault_name`. This requires querying the raw `earn` items. |
