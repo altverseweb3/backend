@@ -44,7 +44,7 @@ This index enables efficient queries for offline analytics jobs (e.g., "fetch al
 
 | GSI Name | GSI Partition Key | GSI Sort Key |
 | :--- | :--- | :--- |
-| `transactions-by-time-gsi` | `tx_type` (String) | `timestamp` (String) |
+| `transactions-by-time-gsi` | `tx_type` (String) | `timestamp` (Number) |
 
 ---
 
