@@ -3,6 +3,7 @@ from ...utils.utils import build_response
 
 from .leaderboard import get_leaderboard, get_user_entry
 from .users import get_total_users, get_periodic_user_stats
+from .activity import get_total_activity_stats, get_periodic_activity_stats
 
 
 def handle(event):
@@ -19,13 +20,20 @@ def handle(event):
                 400, {"error": "Request body must include 'queryType'"}
             )
 
-        # Route to the imported functions
-        elif query_type == "total_users":
+        # --- Users Routes ---
+        if query_type == "total_users":
             return get_total_users(body)
         elif query_type == "periodic_user_stats":
             return get_periodic_user_stats(body)
 
-        if query_type == "leaderboard":
+        # --- Activity Routes ---
+        elif query_type == "total_activity_stats":
+            return get_total_activity_stats(body)
+        elif query_type == "periodic_activity_stats":
+            return get_periodic_activity_stats(body)
+
+        # --- Leaderboard Routes ---
+        elif query_type == "leaderboard":
             return get_leaderboard(body)
         elif query_type == "user_leaderboard_entry":
             return get_user_entry(body)

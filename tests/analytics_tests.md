@@ -68,7 +68,65 @@ This event tests the `periodic_user_stats` query for a **monthly** period. It hi
 }
 ```
 
-### 5\. Fetch Global Leaderboard (Limit 50)
+-----
+
+### 5\. Fetch All-Time Activity Stats (KPIs)
+
+This event tests the `total_activity_stats` query, which hits the `get_total_activity_stats` function. It should return a single JSON object with all-time KPI scorecards (e.g., `total_transactions`, `dapp_entrances`, `total_users`).
+
+```json
+{
+  "path": "/analytics",
+  "httpMethod": "POST",
+  "body": "{\"queryType\": \"total_activity_stats\"}"
+}
+```
+
+-----
+
+### 6\. Fetch Periodic Activity Time-series (Daily)
+
+This event tests the `periodic_activity_stats` query for a **daily** time-series. It hits the `get_periodic_activity_stats` function with a `limit`. It should return an **array** of objects, one for each of the last 7 days, containing all metrics needed for the time-series charts (e.g., `total_transactions`, `swap_count`, `active_users`, `transactions_per_active_user`).
+
+```json
+{
+  "path": "/analytics",
+  "httpMethod": "POST",
+  "body": "{\"queryType\": \"periodic_activity_stats\", \"period_type\": \"daily\", \"limit\": 7}"
+}
+```
+
+-----
+
+### 7\. Fetch Periodic Activity Time-series (Weekly)
+
+This event tests the `periodic_activity_stats` query for a **weekly** time-series. It hits the `get_periodic_activity_stats` function. It should return an **array** of objects, one for each of the last 8 weeks.
+
+```json
+{
+  "path": "/analytics",
+  "httpMethod": "POST",
+  "body": "{\"queryType\": \"periodic_activity_stats\", \"period_type\": \"weekly\", \"limit\": 8}"
+}
+```
+
+-----
+
+### 8\. Fetch Periodic Activity Time-series (Monthly)
+
+This event tests the `periodic_activity_stats` query for a **monthly** time-series. It hits the `get_periodic_activity_stats` function. It should return an **array** of objects, one for each of the last 6 months.
+
+```json
+{
+  "path": "/analytics",
+  "httpMethod": "POST",
+  "body": "{\"queryType\": \"periodic_activity_stats\", \"period_type\": \"monthly\", \"limit\": 6}"
+}
+```
+
+-----
+
+### 9\. Fetch Global Leaderboard (Limit 50)
 
 This event tests the standard request for the global leaderboard, fetching the top 50 users.
 
@@ -82,7 +140,7 @@ This event tests the standard request for the global leaderboard, fetching the t
 
 -----
 
-### 6\. Fetch Weekly Leaderboard (Limit 50)
+### 10\. Fetch Weekly Leaderboard (Limit 50)
 
 This event tests the standard request for the weekly leaderboard, fetching the top 50 users for the current week.
 
@@ -96,7 +154,7 @@ This event tests the standard request for the weekly leaderboard, fetching the t
 
 -----
 
-### 7\. Fetch Specific User's Leaderboard Entry
+### 11\. Fetch Specific User's Leaderboard Entry
 
 This event tests the `user_leaderboard_entry` query. It should return a single JSON object containing the specified user's `global_total_xp` and `weekly_xp`.
 
