@@ -126,7 +126,63 @@ This event tests the `periodic_activity_stats` query for a **monthly** time-seri
 
 -----
 
-### 9\. Fetch Global Leaderboard (Limit 50)
+### 9\. Fetch All-Time Swap Stats
+
+This event tests the `total_swap_stats` query, which hits the `get_total_swap_stats` function. It should return an object containing the `total_swap_count`, a `swap_routes` breakdown, and the `cross_chain_count` vs. `same_chain_count`.
+
+```json
+{
+  "path": "/analytics",
+  "httpMethod": "POST",
+  "body": "{\"queryType\": \"total_swap_stats\"}"
+}
+```
+
+-----
+
+### 10\. Fetch Periodic Swap Stats (Daily)
+
+This event tests the `periodic_swap_stats` query for a **daily** period. It hits the `get_periodic_swap_stats` function and should return the `swap_routes` breakdown and cross-chain vs. same-chain counts for that specific day.
+
+```json
+{
+  "path": "/analytics",
+  "httpMethod": "POST",
+  "body": "{\"queryType\": \"periodic_swap_stats\", \"period_type\": \"daily\", \"start_date\": \"2025-10-26\"}"
+}
+```
+
+-----
+
+### 11\. Fetch Periodic Swap Stats (Weekly)
+
+This event tests the `periodic_swap_stats` query for a **weekly** period.
+
+```json
+{
+  "path": "/analytics",
+  "httpMethod": "POST",
+  "body": "{\"queryType\": \"periodic_swap_stats\", \"period_type\": \"weekly\", \"start_date\": \"2025-10-20\"}"
+}
+```
+
+-----
+
+### 12\. Fetch Periodic Swap Stats (Monthly)
+
+This event tests the `periodic_swap_stats` query for a **monthly** period.
+
+```json
+{
+  "path": "/analytics",
+  "httpMethod": "POST",
+  "body": "{\"queryType\": \"periodic_swap_stats\", \"period_type\": \"monthly\", \"start_date\": \"2025-10-01\"}"
+}
+```
+
+-----
+
+### 13\. Fetch Global Leaderboard (Limit 50)
 
 This event tests the standard request for the global leaderboard, fetching the top 50 users.
 
@@ -140,7 +196,7 @@ This event tests the standard request for the global leaderboard, fetching the t
 
 -----
 
-### 10\. Fetch Weekly Leaderboard (Limit 50)
+### 14\. Fetch Weekly Leaderboard (Limit 50)
 
 This event tests the standard request for the weekly leaderboard, fetching the top 50 users for the current week.
 
@@ -154,7 +210,7 @@ This event tests the standard request for the weekly leaderboard, fetching the t
 
 -----
 
-### 11\. Fetch Specific User's Leaderboard Entry
+### 15\. Fetch Specific User's Leaderboard Entry
 
 This event tests the `user_leaderboard_entry` query. It should return a single JSON object containing the specified user's `global_total_xp` and `weekly_xp`.
 

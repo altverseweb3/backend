@@ -12,9 +12,9 @@ This list includes metrics that can be pulled **instantly** from aggregated `STA
 | **Overall Activity** | Activity Breakdown (Time-series) | `Get` `STAT#{period}#GENERAL` item. <br> Read **`swap_count`**, **`lending_count`**, and **`earn_count`** attributes. | Stacked Bar Chart | ✅ |
 | **Overall Activity** | dApp Entrances (Time-series) | `Get` `STAT#{period}#GENERAL` item. <br> Read the **`dapp_entrances`** attribute. | Line/Bar Chart | ✅ |
 | **Overall Activity** | Transactions per Active User | `Get` `STAT#{period}#GENERAL` item. <br> Calculate **`(swap_count + lending_count + earn_count) / active_users`**. | Line Chart / KPI | ✅ |
-| **Swap Metrics** | **Total Swap Count** | `Get` `STAT#all#ALL` item. <br> Read the **`swap_count`** attribute. | KPI Scorecard | ❌ |
-| **Swap Metrics** | Swap Routes (Chains) Breakdown | `Query` `PK = STAT#{period}` and `SK starts_with "SWAP#"`. <br> Aggregate results from all `periodic_swap_stats` items. | Sankey Diagram / Bar Chart | ❌ |
-| **Swap Metrics** | Cross-Chain vs. Same-Chain | `Query` `PK = STAT#{period}` and `SK starts_with "SWAP#"`. <br> Backend logic parses the `SK` (`SWAP#{source}#{dest}`) to sum `count` for `source != dest` vs. `source == dest`. | Donut Chart | ❌ |
+| **Swap Metrics** | **Total Swap Count** | `Get` `STAT#all#ALL` item. <br> Read the **`swap_count`** attribute. | KPI Scorecard | ✅ |
+| **Swap Metrics** | Swap Routes (Chains) Breakdown | `Query` `PK = STAT#{period}` and `SK starts_with "SWAP#"`. <br> Aggregate results from all `periodic_swap_stats` items. | Sankey Diagram / Bar Chart | ✅ |
+| **Swap Metrics** | Cross-Chain vs. Same-Chain | `Query` `PK = STAT#{period}` and `SK starts_with "SWAP#"`. <br> Backend logic parses the `SK` (`SWAP#{source}#{dest}`) to sum `count` for `source != dest` vs. `source == dest`. | Donut Chart | ✅ |
 | **Lending Metrics** | **Total Lending Count** | `Get` `STAT#all#ALL` item. <br> Read the **`lending_count`** attribute. | KPI Scorecard | ❌ |
 | **Lending Metrics** | Lending Market/Chain Breakdown | `Query` `PK = STAT#{period}` and `SK starts_with "LENDING#"`. <br> Backend logic parses the `SK` (`LENDING#{chain}#{market}`) to aggregate `count` by chain or market. | Bar Chart / Donut Chart | ❌ |
 | **Earn Metrics** | **Total Earn Count** | `Get` `STAT#all#ALL` item. <br> Read the **`earn_count`** attribute. | KPI Scorecard | ❌ |
