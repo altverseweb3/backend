@@ -1,7 +1,7 @@
 import json
 from botocore.exceptions import ClientError
 from ...config import metrics_table
-from ...utils.utils import build_response
+from ...utils.utils import build_response, get_past_periods
 
 
 def get_total_users(body):
@@ -9,6 +9,9 @@ def get_total_users(body):
     Fetches the all-time total user count.
     Corresponds to: User & Audience -> Total Users
     - Query: Get STAT#all#ALL, read `new_users`
+
+    QueryType: "total_users"
+    Body: {}
     """
     try:
         response = metrics_table.get_item(
@@ -29,45 +32,59 @@ def get_total_users(body):
 
 def get_periodic_user_stats(body):
     """
-    Fetches new and active users for a specific period (daily, weekly, monthly).
-    Corresponds to:
-    - User & Audience -> New Users (Time-series)
-    - User & Audience -> Active Users (DAU/WAU/MAU)
-    - Query: Get STAT#{period}#GENERAL, read `new_users`, `active_users`
+    Fetches new and active users for the last 'limit' periods (daily, weekly, monthly).
+    This is used to populate time-series charts for New Users and Active Users (DAU/WAU/MAU).
 
-    Expected body:
-    {
-        "queryType": "periodic_user_stats",
+    QueryType: "periodic_user_stats"
+    Body: {
         "period_type": "daily" | "weekly" | "monthly",
-        "period_start_date": "YYYY-MM-DD",
+        "limit": 7
     }
     """
     try:
-        period_type = body.get("period_type")
-        period_start_date = body.get("period_start_date")
+        period_type = body.get("period_type", "daily")
+        try:
+            # Set reasonable bounds for limit to prevent abuse
+            limit = min(max(int(body.get("limit", 7)), 1), 90)
+        except (ValueError, TypeError):
+            limit = 7  # Default limit
 
-        if not period_type or not period_start_date:
+        if period_type not in ["daily", "weekly", "monthly"]:
             return build_response(
                 400,
-                {"error": "Request must include 'period_type' and 'period_start_date'"},
+                {
+                    "error": "Invalid period_type. Must be 'daily', 'weekly', or 'monthly'."
+                },
             )
 
-        response = metrics_table.get_item(
-            Key={
-                "PK": f"STAT#{period_type}#{period_start_date}",
-                "SK": "GENERAL",
-            },
-            ProjectionExpression="new_users, active_users",
-        )
+        # Get the list of period start dates (e.g., ["2023-10-27", "2023-10-26", ...])
+        period_starts = get_past_periods(period_type, limit)
 
-        # Default to 0 if the item or attributes don't exist for the period
-        item = response.get("Item", {})
-        new_users = item.get("new_users", 0)
-        active_users = item.get("active_users", 0)
+        results = []
+        # Get stats for each period in the list
+        for period_start in period_starts:
+            pk = f"STAT#{period_type}#{period_start}"
 
-        return build_response(
-            200, {"new_users": int(new_users), "active_users": int(active_users)}
-        )
+            response = metrics_table.get_item(
+                Key={"PK": pk, "SK": "GENERAL"},
+                ProjectionExpression="new_users, active_users",
+            )
+
+            # Default to 0 if the item or attributes don't exist for the period
+            item = response.get("Item", {})
+            new_users = item.get("new_users", 0)
+            active_users = item.get("active_users", 0)
+
+            results.append(
+                {
+                    "period_start": period_start,
+                    "new_users": int(new_users),
+                    "active_users": int(active_users),
+                }
+            )
+
+        # Return the data in descending order (most recent first)
+        return build_response(200, {"period_type": period_type, "data": results})
 
     except ClientError as e:
         print(f"Error getting periodic user stats: {e}")

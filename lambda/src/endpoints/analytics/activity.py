@@ -58,7 +58,7 @@ def get_periodic_activity_stats(body):
     {
         "queryType": "periodic_activity_stats",
         "period_type": "daily" | "weekly" | "monthly",
-        "limit": 7 | 4 | 54 | 12
+        "limit": 7,
     }
     """
     try:

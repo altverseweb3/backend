@@ -18,53 +18,43 @@ This event tests the `total_users` query, which hits the `get_total_users` funct
 
 -----
 
-### 2\. Fetch Daily New & Active Users (DAU)
+### 2\. Fetch Periodic User Stats Time-series (Daily)
 
-This event tests the `periodic_user_stats` query for a **daily** period. It hits the `get_periodic_user_stats` function and should return an object containing `new_users` and `active_users` for that specific day.
-
-```json
-{
-  "path": "/analytics",
-  "httpMethod": "POST",
-  "body": "{\"queryType\": \"periodic_user_stats\", \"period_type\": \"daily\", \"period_start_date\": \"2025-10-26\"}"
-}
-```
-
-and
+This event tests the `periodic_user_stats` query for a **daily** time-series. It hits the `get_periodic_user_stats` function and should return an **array** of objects, one for each of the last 7 days, containing `new_users` and `active_users`.
 
 ```json
 {
   "path": "/analytics",
   "httpMethod": "POST",
-  "body": "{\"queryType\": \"periodic_user_stats\", \"period_type\": \"daily\", \"period_start_date\": \"2025-10-27\"}"
+  "body": "{\"queryType\": \"periodic_user_stats\", \"period_type\": \"daily\", \"limit\": 7}"
 }
 ```
 
 -----
 
-### 3\. Fetch Weekly New & Active Users (WAU)
+### 3\. Fetch Periodic User Stats Time-series (Weekly)
 
-This event tests the `periodic_user_stats` query for a **weekly** period. It hits the `get_periodic_user_stats` function and should return `new_users` and `active_users` for that specific week.
+This event tests the `periodic_user_stats` query for a **weekly** time-series. It hits the `get_periodic_user_stats` function and should return an **array** of objects for the last 8 weeks.
 
 ```json
 {
   "path": "/analytics",
   "httpMethod": "POST",
-  "body": "{\"queryType\": \"periodic_user_stats\", \"period_type\": \"weekly\", \"period_start_date\": \"2025-10-20\"}"
+  "body": "{\"queryType\": \"periodic_user_stats\", \"period_type\": \"weekly\", \"limit\": 8}"
 }
 ```
 
 -----
 
-### 4\. Fetch Monthly New & Active Users (MAU)
+### 4\. Fetch Periodic User Stats Time-series (Monthly)
 
-This event tests the `periodic_user_stats` query for a **monthly** period. It hits the `get_periodic_user_stats` function and should return `new_users` and `active_users` for that specific month.
+This event tests the `periodic_user_stats` query for a **monthly** time-series. It hits the `get_periodic_user_stats` function and should return an **array** of objects for the last 6 months.
 
 ```json
 {
   "path": "/analytics",
   "httpMethod": "POST",
-  "body": "{\"queryType\": \"periodic_user_stats\", \"period_type\": \"monthly\", \"period_start_date\": \"2025-10-01\"}"
+  "body": "{\"queryType\": \"periodic_user_stats\", \"period_type\": \"monthly\", \"limit\": 6}"
 }
 ```
 
