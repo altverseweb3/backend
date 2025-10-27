@@ -4,9 +4,9 @@ This list includes metrics that can be pulled **instantly** from aggregated `STA
 
 | Metric Category | Metric Name | Description / Calculation (Based on Schema) | Chart Type | Status |
 | :--- | :--- | :--- | :--- | :--- |
-| **User & Audience** | **Total Users** | `Get` `STAT#all#ALL` item. <br> Read the **`new_users`** attribute. | KPI Scorecard | ❌ |
-| **User & Audience** | New Users (Time-series) | `Get` `STAT#{period}#GENERAL` item. <br> Read the **`new_users`** attribute. | Line/Bar Chart | ❌ |
-| **User & Audience** | Active Users (DAU/WAU/MAU) | `Get` `STAT#{period}#GENERAL` item. <br> Read the **`active_users`** attribute. | Line Chart | ❌ |
+| **User & Audience** | **Total Users** | `Get` `STAT#all#ALL` item. <br> Read the **`new_users`** attribute. | KPI Scorecard | ✅ |
+| **User & Audience** | New Users (Time-series) | `Get` `STAT#{period}#GENERAL` item. <br> Read the **`new_users`** attribute. | Line/Bar Chart | ✅ |
+| **User & Audience** | Active Users (DAU/WAU/MAU) | `Get` `STAT#{period}#GENERAL` item. <br> Read the **`active_users`** attribute. | Line Chart | ✅ |
 | **Overall Activity** | **Total Transactions** | `Get` `STAT#all#ALL` item. <br> Calculate **`swap_count + lending_count + earn_count`**. | KPI Scorecard | ❌ |
 | **Overall Activity** | Transaction Volume (Time-series) | `Get` `STAT#{period}#GENERAL` item. <br> Calculate **`swap_count + lending_count + earn_count`**. | Line/Bar Chart | ❌ |
 | **Overall Activity** | Activity Breakdown (Time-series) | `Get` `STAT#{period}#GENERAL` item. <br> Read **`swap_count`**, **`lending_count`**, and **`earn_count`** attributes. | Stacked Bar Chart | ❌ |

@@ -2,6 +2,7 @@ import json
 from ...utils.utils import build_response
 
 from .leaderboard import get_leaderboard, get_user_entry
+from .users import get_total_users, get_periodic_user_stats
 
 
 def handle(event):
@@ -19,6 +20,11 @@ def handle(event):
             )
 
         # Route to the imported functions
+        elif query_type == "total_users":
+            return get_total_users(body)
+        elif query_type == "periodic_user_stats":
+            return get_periodic_user_stats(body)
+
         if query_type == "leaderboard":
             return get_leaderboard(body)
         elif query_type == "user_leaderboard_entry":
