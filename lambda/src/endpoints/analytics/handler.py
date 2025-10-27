@@ -6,6 +6,7 @@ from .users import get_total_users, get_periodic_user_stats
 from .activity import get_total_activity_stats, get_periodic_activity_stats
 from .swap import get_total_swap_stats, get_periodic_swap_stats
 from .lending import get_total_lending_stats, get_periodic_lending_stats
+from .earn import get_total_earn_stats, get_periodic_earn_stats
 
 
 def handle(event):
@@ -45,6 +46,12 @@ def handle(event):
             return get_total_lending_stats(body)
         elif query_type == "periodic_lending_stats":
             return get_periodic_lending_stats(body)
+
+        # --- Earn Routes ---
+        elif query_type == "total_earn_stats":
+            return get_total_earn_stats(body)
+        elif query_type == "periodic_earn_stats":
+            return get_periodic_earn_stats(body)
 
         # --- Leaderboard Routes ---
         elif query_type == "leaderboard":

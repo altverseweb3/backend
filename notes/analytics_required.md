@@ -17,8 +17,8 @@ This list includes metrics that can be pulled **instantly** from aggregated `STA
 | **Swap Metrics** | Cross-Chain vs. Same-Chain | `Query` `PK = STAT#{period}` and `SK starts_with "SWAP#"`. <br> Backend logic parses the `SK` (`SWAP#{source}#{dest}`) to sum `count` for `source != dest` vs. `source == dest`. | Donut Chart | ✅ |
 | **Lending Metrics** | **Total Lending Count** | `Get` `STAT#all#ALL` item. <br> Read the **`lending_count`** attribute. | KPI Scorecard | ✅ |
 | **Lending Metrics** | Lending Market/Chain Breakdown | `Query` `PK = STAT#{period}` and `SK starts_with "LENDING#"`. <br> Backend logic parses the `SK` (`LENDING#{chain}#{market}`) to aggregate `count` by chain or market. | Bar Chart / Donut Chart | ✅ |
-| **Earn Metrics** | **Total Earn Count** | `Get` `STAT#all#ALL` item. <br> Read the **`earn_count`** attribute. | KPI Scorecard | ❌ |
-| **Earn Metrics** | Earn Protocol/Chain Breakdown | `Query` `PK = STAT#{period}` and `SK starts_with "EARN#"`. <br> Backend logic parses the `SK` (`EARN#{chain}#{protocol}`) to aggregate `count` by chain or protocol. | Bar Chart / Donut Chart | ❌ |
+| **Earn Metrics** | **Total Earn Count** | `Get` `STAT#all#ALL` item. <br> Read the **`earn_count`** attribute. | KPI Scorecard | ✅ |
+| **Earn Metrics** | Earn Protocol/Chain Breakdown | `Query` `PK = STAT#{period}` and `SK starts_with "EARN#"`. <br> Backend logic parses the `SK` (`EARN#{chain}#{protocol}`) to aggregate `count` by chain or protocol. | Bar Chart / Donut Chart | ✅ |
 | **Leaderboard** | Weekly Leaderboard | `Query` the **`leaderboard-by-xp-gsi`** with `PK = LEADERBOARD#{current_week}`. | Table | ✅ |
 | **Leaderboard** | Global Leaderboard | `Query` the **`global-leaderboard-by-xp-gsi`** with `PK = "GLOBAL"`. | Table | ✅ |
 
