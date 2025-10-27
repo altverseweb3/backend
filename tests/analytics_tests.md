@@ -140,43 +140,46 @@ This event tests the `total_swap_stats` query, which hits the `get_total_swap_st
 
 -----
 
-### 10\. Fetch Periodic Swap Stats (Daily)
+### 10\. Fetch Periodic Swap Stats Time-series (Daily)
 
-This event tests the `periodic_swap_stats` query for a **daily** period. It hits the `get_periodic_swap_stats` function and should return the `swap_routes` breakdown and cross-chain vs. same-chain counts for that specific day.
+This event tests the `periodic_swap_stats` query for a **daily** time-series. It should return an **array** of objects, one for each of the last 7 days.
+
 
 ```json
 {
   "path": "/analytics",
   "httpMethod": "POST",
-  "body": "{\"queryType\": \"periodic_swap_stats\", \"period_type\": \"daily\", \"start_date\": \"2025-10-26\"}"
+  "body": "{\"queryType\": \"periodic_swap_stats\", \"period_type\": \"daily\", \"limit\": 7}"
 }
 ```
 
 -----
 
-### 11\. Fetch Periodic Swap Stats (Weekly)
+### 11\. Fetch Periodic Swap Stats Time-series (Weekly)
 
-This event tests the `periodic_swap_stats` query for a **weekly** period.
+This event tests the `periodic_swap_stats` query for a **weekly** time-series. It should return an **array** of objects, one for each of the last 8 weeks.
+
 
 ```json
 {
   "path": "/analytics",
   "httpMethod": "POST",
-  "body": "{\"queryType\": \"periodic_swap_stats\", \"period_type\": \"weekly\", \"start_date\": \"2025-10-20\"}"
+  "body": "{\"queryType\": \"periodic_swap_stats\", \"period_type\": \"weekly\", \"limit\": 8}"
 }
 ```
 
 -----
 
-### 12\. Fetch Periodic Swap Stats (Monthly)
+### 12\. Fetch Periodic Swap Stats Time-series (Monthly)
 
-This event tests the `periodic_swap_stats` query for a **monthly** period.
+This event tests the `periodic_swap_stats` query for a **monthly** time-series. It should return an **array** of objects, one for each of the last 6 months.
+
 
 ```json
 {
   "path": "/analytics",
   "httpMethod": "POST",
-  "body": "{\"queryType\": \"periodic_swap_stats\", \"period_type\": \"monthly\", \"start_date\": \"2025-10-01\"}"
+  "body": "{\"queryType\": \"periodic_swap_stats\", \"period_type\": \"monthly\", \"limit\": 6}"
 }
 ```
 
@@ -224,7 +227,21 @@ This event tests the `periodic_lending_stats` query for a **weekly** time-series
 
 -----
 
-### 16\. Fetch Global Leaderboard (Limit 50)
+### 16\. Fetch Periodic Lending Stats (Monthly)
+
+This event tests the `periodic_lending_stats` query for a **monthly** time-series. It hits the `get_periodic_lending_stats` function with a `limit`. It should return an **array** of objects, one for each of the last 6 months.
+
+```json
+{
+  "path": "/analytics",
+  "httpMethod": "POST",
+  "body": "{\"queryType\": \"periodic_lending_stats\", \"period_type\": \"monthly\", \"limit\": 6}"
+}
+```
+
+-----
+
+### 17\. Fetch Global Leaderboard (Limit 50)
 
 This event tests the standard request for the global leaderboard, fetching the top 50 users.
 
@@ -238,7 +255,7 @@ This event tests the standard request for the global leaderboard, fetching the t
 
 -----
 
-### 17\. Fetch Weekly Leaderboard (Limit 50)
+### 18\. Fetch Weekly Leaderboard (Limit 50)
 
 This event tests the standard request for the weekly leaderboard, fetching the top 50 users for the current week.
 
@@ -252,7 +269,7 @@ This event tests the standard request for the weekly leaderboard, fetching the t
 
 -----
 
-### 18\. Fetch Specific User's Leaderboard Entry
+### 19\. Fetch Specific User's Leaderboard Entry
 
 This event tests the `user_leaderboard_entry` query. It should return a single JSON object containing the specified user's `global_total_xp` and `weekly_xp`.
 
