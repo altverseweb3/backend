@@ -4,7 +4,8 @@ from ...utils.utils import build_response
 from .leaderboard import get_leaderboard, get_user_entry
 from .users import get_total_users, get_periodic_user_stats
 from .activity import get_total_activity_stats, get_periodic_activity_stats
-from .swap import get_total_swap_stats, get_periodic_swap_stats  # <-- ADDED IMPORT
+from .swap import get_total_swap_stats, get_periodic_swap_stats
+from .lending import get_total_lending_stats, get_periodic_lending_stats
 
 
 def handle(event):
@@ -38,6 +39,12 @@ def handle(event):
             return get_total_swap_stats(body)
         elif query_type == "periodic_swap_stats":
             return get_periodic_swap_stats(body)
+
+        # --- Lending Routes ---
+        elif query_type == "total_lending_stats":
+            return get_total_lending_stats(body)
+        elif query_type == "periodic_lending_stats":
+            return get_periodic_lending_stats(body)
 
         # --- Leaderboard Routes ---
         elif query_type == "leaderboard":
