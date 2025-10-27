@@ -5,18 +5,27 @@ from ..config import dynamodb, metrics_table
 from ..utils.utils import build_response, get_time_periods, get_client_ip
 
 
-def is_new_user(user_address):
-    """Checks if a user_stats item exists for the given user address."""
+def get_user_state(user_address):
+    """
+    Checks if a user is new and returns their last active time.
+    Returns:
+        (is_new_user, last_active_timestamp)
+    """
     try:
         response = metrics_table.get_item(
             Key={"PK": f"USER#{user_address}", "SK": "STATS"},
-            ProjectionExpression="PK",  # Only check for existence to save read capacity
+            ProjectionExpression="last_active_timestamp",
         )
-        return "Item" not in response
+        if "Item" not in response:
+            return (True, None)  # User is new
+        else:
+            # User exists, return their last active time
+            return (False, response["Item"].get("last_active_timestamp"))
+
     except ClientError as e:
         print(f"Error checking for new user {user_address}: {e}")
-        # Fail safe: assume not a new user to prevent overcounting stats.
-        return False
+        # Fail safe: assume not new and not active to prevent overcounting
+        return (False, datetime.now(timezone.utc).isoformat())
 
 
 def process_entrance():
@@ -30,6 +39,14 @@ def process_entrance():
             "monthly": periods["monthly"],
         }
 
+        # 1. Update All-Time General Stats
+        metrics_table.update_item(
+            Key={"PK": "STAT#all#ALL", "SK": "GENERAL"},
+            UpdateExpression="SET dapp_entrances = if_not_exists(dapp_entrances, :start) + :inc",
+            ExpressionAttributeValues={":inc": 1, ":start": 0},
+        )
+
+        # 2. Update Periodic Stats
         for period_type, start_date in period_keys.items():
             metrics_table.update_item(
                 Key={"PK": f"STAT#{period_type}#{start_date}", "SK": "GENERAL"},
@@ -73,14 +90,37 @@ def process_swap(payload, ip_address):
         now_dt = datetime.now(timezone.utc)
         now_ts_iso = now_dt.isoformat()
 
-        is_new = is_new_user(user_address)
-        periods = get_time_periods(now_dt)
+        # 1. Get the user's state before the transaction
+        is_new, last_active_ts = get_user_state(user_address)
+
+        # 2. Get time periods for now
+        current_periods = get_time_periods(now_dt)
+
+        # 3. Determine if this is the user's first action in each period
+        active_inc = {"daily": 0, "weekly": 0, "monthly": 0}
+
+        if is_new:
+            # If they are a new user, they are active in all periods
+            active_inc = {"daily": 1, "weekly": 1, "monthly": 1}
+        elif last_active_ts:
+            # If they are an existing user, compare their last active time
+            last_active_dt = datetime.fromisoformat(last_active_ts)
+            last_active_periods = get_time_periods(last_active_dt)
+
+            if last_active_periods["daily"] != current_periods["daily"]:
+                active_inc["daily"] = 1
+            if last_active_periods["weekly"] != current_periods["weekly"]:
+                active_inc["weekly"] = 1
+            if last_active_periods["monthly"] != current_periods["monthly"]:
+                active_inc["monthly"] = 1
+
         transaction_items = []
 
         # 1. Record Individual Swap
         swap_item = payload.copy()
         swap_item["PK"] = f"USER#{user_address}"
         swap_item["SK"] = f"SWAP#{payload['timestamp']}#{payload['tx_hash']}"
+        swap_item["tx_type"] = "SWAP"
         transaction_items.append(
             {"Put": {"TableName": metrics_table.name, "Item": swap_item}}
         )
@@ -90,19 +130,18 @@ def process_swap(payload, ip_address):
         user_stats_expr = (
             "SET total_swap_count = if_not_exists(total_swap_count, :z) + :o, "
             "last_active_timestamp = :ts, "
-            "total_xp = if_not_exists(total_xp, :z) + :xp_val, "
-            "leaderboard_scope = if_not_exists(leaderboard_scope, :scope)"
+            "total_xp = if_not_exists(total_xp, :z) + :xp_val"
         )
         user_stats_vals = {
             ":o": 1,
             ":z": 0,
             ":ts": now_ts_iso,
             ":xp_val": xp_to_add,
-            ":scope": "GLOBAL",
         }
         if is_new:
-            user_stats_expr += ", first_active_timestamp = :ts, ip_address = :ip"
+            user_stats_expr += ", first_active_timestamp = :ts, ip_address = :ip, leaderboard_scope = :scope"
             user_stats_vals[":ip"] = ip_address
+            user_stats_vals[":scope"] = "GLOBAL"
 
         transaction_items.append(
             {
@@ -115,17 +154,61 @@ def process_swap(payload, ip_address):
             }
         )
 
-        # 3. & 4. Update Periodic Stats (General and Swap-Specific)
+        # 3. Update ALL-TIME General Stats
+        all_time_general_expr = "SET swap_count = if_not_exists(swap_count, :z) + :o"
+        all_time_general_vals = {":o": 1, ":z": 0}
+        if is_new:
+            all_time_general_expr += ", new_users = if_not_exists(new_users, :z) + :o"
+
+        transaction_items.append(
+            {
+                "Update": {
+                    "TableName": metrics_table.name,
+                    "Key": {"PK": "STAT#all#ALL", "SK": "GENERAL"},
+                    "UpdateExpression": all_time_general_expr,
+                    "ExpressionAttributeValues": all_time_general_vals,
+                }
+            }
+        )
+
+        # 4. Update ALL-TIME Swap-Specific Stats
+        all_time_direction_sk = (
+            f"SWAP#{payload['source_chain']},{payload['destination_chain']}"
+        )
+        transaction_items.append(
+            {
+                "Update": {
+                    "TableName": metrics_table.name,
+                    "Key": {"PK": "STAT#all#ALL", "SK": all_time_direction_sk},
+                    "UpdateExpression": "SET #c = if_not_exists(#c, :z) + :o",
+                    "ExpressionAttributeNames": {"#c": "count"},
+                    "ExpressionAttributeValues": {":o": 1, ":z": 0},
+                }
+            }
+        )
+
+        # 5. & 6. Update Periodic Stats (General and Swap-Specific)
         period_keys = {
-            "daily": periods["daily"],
-            "weekly": periods["weekly"],
-            "monthly": periods["monthly"],
+            "daily": current_periods["daily"],
+            "weekly": current_periods["weekly"],
+            "monthly": current_periods["monthly"],
         }
+
         for period_type, start_date in period_keys.items():
             # General Stats
-            general_stats_expr = "SET swap_count = if_not_exists(swap_count, :z) + :o, active_users = if_not_exists(active_users, :z) + :o"
+            general_stats_expr = (
+                "SET swap_count = if_not_exists(swap_count, :z) + :o, "
+                "active_users = if_not_exists(active_users, :z) + :active_inc"
+            )
+            general_stats_vals = {
+                ":o": 1,
+                ":z": 0,
+                ":active_inc": active_inc[period_type],
+            }
+
             if is_new:
                 general_stats_expr += ", new_users = if_not_exists(new_users, :z) + :o"
+
             transaction_items.append(
                 {
                     "Update": {
@@ -135,10 +218,11 @@ def process_swap(payload, ip_address):
                             "SK": "GENERAL",
                         },
                         "UpdateExpression": general_stats_expr,
-                        "ExpressionAttributeValues": {":o": 1, ":z": 0},
+                        "ExpressionAttributeValues": general_stats_vals,
                     }
                 }
             )
+
             # Swap Stats
             direction_sk = (
                 f"SWAP#{payload['source_chain']},{payload['destination_chain']}"
@@ -158,13 +242,13 @@ def process_swap(payload, ip_address):
                 }
             )
 
-        # 5. Update Leaderboard
+        # 7. Update Leaderboard
         transaction_items.append(
             {
                 "Update": {
                     "TableName": metrics_table.name,
                     "Key": {
-                        "PK": f'LEADERBOARD#{periods["leaderboard_week"]}',
+                        "PK": f'LEADERBOARD#{current_periods["leaderboard_week"]}',
                         "SK": f"USER#{user_address}",
                     },
                     "UpdateExpression": "SET xp = if_not_exists(xp, :z) + :xp_val, first_xp_timestamp = if_not_exists(first_xp_timestamp, :ts)",
@@ -214,14 +298,29 @@ def process_lending(payload, ip_address):
         now_dt = datetime.now(timezone.utc)
         now_ts_iso = now_dt.isoformat()
 
-        is_new = is_new_user(user_address)
-        periods = get_time_periods(now_dt)
+        is_new, last_active_ts = get_user_state(user_address)
+        current_periods = get_time_periods(now_dt)
+
+        active_inc = {"daily": 0, "weekly": 0, "monthly": 0}
+        if is_new:
+            active_inc = {"daily": 1, "weekly": 1, "monthly": 1}
+        elif last_active_ts:
+            last_active_dt = datetime.fromisoformat(last_active_ts)
+            last_active_periods = get_time_periods(last_active_dt)
+            if last_active_periods["daily"] != current_periods["daily"]:
+                active_inc["daily"] = 1
+            if last_active_periods["weekly"] != current_periods["weekly"]:
+                active_inc["weekly"] = 1
+            if last_active_periods["monthly"] != current_periods["monthly"]:
+                active_inc["monthly"] = 1
+
         transaction_items = []
 
         # 1. Record Individual Lending Action
         lending_item = payload.copy()
         lending_item["PK"] = f"USER#{user_address}"
         lending_item["SK"] = f"LEND#{payload['timestamp']}#{payload['tx_hash']}"
+        lending_item["tx_type"] = "LEND"
         transaction_items.append(
             {"Put": {"TableName": metrics_table.name, "Item": lending_item}}
         )
@@ -231,19 +330,18 @@ def process_lending(payload, ip_address):
         user_stats_expr = (
             "SET total_lending_count = if_not_exists(total_lending_count, :z) + :o, "
             "last_active_timestamp = :ts, "
-            "total_xp = if_not_exists(total_xp, :z) + :xp_val, "
-            "leaderboard_scope = if_not_exists(leaderboard_scope, :scope)"
+            "total_xp = if_not_exists(total_xp, :z) + :xp_val"
         )
         user_stats_vals = {
             ":o": 1,
             ":z": 0,
             ":ts": now_ts_iso,
             ":xp_val": xp_to_add,
-            ":scope": "GLOBAL",
         }
         if is_new:
-            user_stats_expr += ", first_active_timestamp = :ts, ip_address = :ip"
+            user_stats_expr += ", first_active_timestamp = :ts, ip_address = :ip, leaderboard_scope = :scope"
             user_stats_vals[":ip"] = ip_address
+            user_stats_vals[":scope"] = "GLOBAL"
 
         transaction_items.append(
             {
@@ -256,17 +354,61 @@ def process_lending(payload, ip_address):
             }
         )
 
-        # 3. & 4. Update Periodic Stats
+        # 3. Update ALL-TIME General Stats
+        all_time_general_expr = (
+            "SET lending_count = if_not_exists(lending_count, :z) + :o"
+        )
+        all_time_general_vals = {":o": 1, ":z": 0}
+        if is_new:
+            all_time_general_expr += ", new_users = if_not_exists(new_users, :z) + :o"
+
+        transaction_items.append(
+            {
+                "Update": {
+                    "TableName": metrics_table.name,
+                    "Key": {"PK": "STAT#all#ALL", "SK": "GENERAL"},
+                    "UpdateExpression": all_time_general_expr,
+                    "ExpressionAttributeValues": all_time_general_vals,
+                }
+            }
+        )
+
+        # 4. Update ALL-TIME Lending-Specific Stats
+        all_time_lending_sk = f"LENDING#{payload['chain']}#{payload['market_name']}"
+        transaction_items.append(
+            {
+                "Update": {
+                    "TableName": metrics_table.name,
+                    "Key": {"PK": "STAT#all#ALL", "SK": all_time_lending_sk},
+                    "UpdateExpression": "SET #c = if_not_exists(#c, :z) + :o",
+                    "ExpressionAttributeNames": {"#c": "count"},
+                    "ExpressionAttributeValues": {":o": 1, ":z": 0},
+                }
+            }
+        )
+
+        # 5. & 6. Update Periodic Stats
         period_keys = {
-            "daily": periods["daily"],
-            "weekly": periods["weekly"],
-            "monthly": periods["monthly"],
+            "daily": current_periods["daily"],
+            "weekly": current_periods["weekly"],
+            "monthly": current_periods["monthly"],
         }
+
         for period_type, start_date in period_keys.items():
             # General Stats
-            general_stats_expr = "SET lending_count = if_not_exists(lending_count, :z) + :o, active_users = if_not_exists(active_users, :z) + :o"
+            general_stats_expr = (
+                "SET lending_count = if_not_exists(lending_count, :z) + :o, "
+                "active_users = if_not_exists(active_users, :z) + :active_inc"
+            )
+            general_stats_vals = {
+                ":o": 1,
+                ":z": 0,
+                ":active_inc": active_inc[period_type],
+            }
+
             if is_new:
                 general_stats_expr += ", new_users = if_not_exists(new_users, :z) + :o"
+
             transaction_items.append(
                 {
                     "Update": {
@@ -276,10 +418,11 @@ def process_lending(payload, ip_address):
                             "SK": "GENERAL",
                         },
                         "UpdateExpression": general_stats_expr,
-                        "ExpressionAttributeValues": {":o": 1, ":z": 0},
+                        "ExpressionAttributeValues": general_stats_vals,
                     }
                 }
             )
+
             # Lending Stats
             lending_sk = f"LENDING#{payload['chain']}#{payload['market_name']}"
             transaction_items.append(
@@ -297,18 +440,18 @@ def process_lending(payload, ip_address):
                 }
             )
 
-        # 5. Update Leaderboard
+        # 7. Update Leaderboard
         transaction_items.append(
             {
                 "Update": {
                     "TableName": metrics_table.name,
                     "Key": {
-                        "PK": f'LEADERBOARD#{periods["leaderboard_week"]}',
+                        "PK": f'LEADERBOARD#{current_periods["leaderboard_week"]}',
                         "SK": f"USER#{user_address}",
                     },
                     "UpdateExpression": "SET xp = if_not_exists(xp, :z) + :xp_val, first_xp_timestamp = if_not_exists(first_xp_timestamp, :ts)",
                     "ExpressionAttributeValues": {
-                        ":xp_val": 100,
+                        ":xp_val": xp_to_add,
                         ":z": 0,
                         ":ts": now_ts_iso,
                     },
@@ -321,7 +464,7 @@ def process_lending(payload, ip_address):
 
     except ClientError as e:
         print(
-            f"DynamoDB Transaction Error in process_lending: {e.response['Error']['Message']}"
+            f"DynamoDB TransactionError in process_lending: {e.response['Error']['Message']}"
         )
         return build_response(500, {"error": "Could not process lending transaction"})
 
@@ -329,7 +472,6 @@ def process_lending(payload, ip_address):
 def process_earn(payload, ip_address):
     """Processes an earn payload to update all relevant metrics."""
     try:
-        # Check for fields specific to an earn event
         required = [
             "user_address",
             "tx_hash",
@@ -355,9 +497,21 @@ def process_earn(payload, ip_address):
         now_dt = datetime.now(timezone.utc)
         now_ts_iso = now_dt.isoformat()
 
-        # Pre-transaction checks
-        is_new = is_new_user(user_address)
-        periods = get_time_periods(now_dt)
+        is_new, last_active_ts = get_user_state(user_address)
+        current_periods = get_time_periods(now_dt)
+
+        active_inc = {"daily": 0, "weekly": 0, "monthly": 0}
+        if is_new:
+            active_inc = {"daily": 1, "weekly": 1, "monthly": 1}
+        elif last_active_ts:
+            last_active_dt = datetime.fromisoformat(last_active_ts)
+            last_active_periods = get_time_periods(last_active_dt)
+            if last_active_periods["daily"] != current_periods["daily"]:
+                active_inc["daily"] = 1
+            if last_active_periods["weekly"] != current_periods["weekly"]:
+                active_inc["weekly"] = 1
+            if last_active_periods["monthly"] != current_periods["monthly"]:
+                active_inc["monthly"] = 1
 
         transaction_items = []
 
@@ -365,6 +519,7 @@ def process_earn(payload, ip_address):
         earn_item = payload.copy()
         earn_item["PK"] = f"USER#{user_address}"
         earn_item["SK"] = f"EARN#{payload['timestamp']}#{payload['tx_hash']}"
+        earn_item["tx_type"] = "EARN"
         transaction_items.append(
             {"Put": {"TableName": metrics_table.name, "Item": earn_item}}
         )
@@ -374,19 +529,18 @@ def process_earn(payload, ip_address):
         user_stats_expr = (
             "SET total_earn_count = if_not_exists(total_earn_count, :z) + :o, "
             "last_active_timestamp = :ts, "
-            "total_xp = if_not_exists(total_xp, :z) + :xp_val, "
-            "leaderboard_scope = if_not_exists(leaderboard_scope, :scope)"
+            "total_xp = if_not_exists(total_xp, :z) + :xp_val"
         )
         user_stats_vals = {
             ":o": 1,
             ":z": 0,
             ":ts": now_ts_iso,
             ":xp_val": xp_to_add,
-            ":scope": "GLOBAL",
         }
         if is_new:
-            user_stats_expr += ", first_active_timestamp = :ts, ip_address = :ip"
+            user_stats_expr += ", first_active_timestamp = :ts, ip_address = :ip, leaderboard_scope = :scope"
             user_stats_vals[":ip"] = ip_address
+            user_stats_vals[":scope"] = "GLOBAL"
 
         transaction_items.append(
             {
@@ -399,17 +553,58 @@ def process_earn(payload, ip_address):
             }
         )
 
-        # 3. & 4. Update Periodic Stats (General and Earn-Specific)
+        # 3. Update ALL-TIME General Stats
+        all_time_general_expr = "SET earn_count = if_not_exists(earn_count, :z) + :o"
+        all_time_general_vals = {":o": 1, ":z": 0}
+        if is_new:
+            all_time_general_expr += ", new_users = if_not_exists(new_users, :z) + :o"
+
+        transaction_items.append(
+            {
+                "Update": {
+                    "TableName": metrics_table.name,
+                    "Key": {"PK": "STAT#all#ALL", "SK": "GENERAL"},
+                    "UpdateExpression": all_time_general_expr,
+                    "ExpressionAttributeValues": all_time_general_vals,
+                }
+            }
+        )
+
+        # 4. Update ALL-TIME Earn-Specific Stats
+        all_time_earn_sk = f"EARN#{payload['chain']}#{payload['protocol']}"
+        transaction_items.append(
+            {
+                "Update": {
+                    "TableName": metrics_table.name,
+                    "Key": {"PK": "STAT#all#ALL", "SK": all_time_earn_sk},
+                    "UpdateExpression": "SET #c = if_not_exists(#c, :z) + :o",
+                    "ExpressionAttributeNames": {"#c": "count"},
+                    "ExpressionAttributeValues": {":o": 1, ":z": 0},
+                }
+            }
+        )
+
+        # 5. & 6. Update Periodic Stats (General and Earn-Specific)
         period_keys = {
-            "daily": periods["daily"],
-            "weekly": periods["weekly"],
-            "monthly": periods["monthly"],
+            "daily": current_periods["daily"],
+            "weekly": current_periods["weekly"],
+            "monthly": current_periods["monthly"],
         }
         for period_type, start_date in period_keys.items():
             # General Stats
-            general_stats_expr = "SET earn_count = if_not_exists(earn_count, :z) + :o, active_users = if_not_exists(active_users, :z) + :o"
+            general_stats_expr = (
+                "SET earn_count = if_not_exists(earn_count, :z) + :o, "
+                "active_users = if_not_exists(active_users, :z) + :active_inc"
+            )
+            general_stats_vals = {
+                ":o": 1,
+                ":z": 0,
+                ":active_inc": active_inc[period_type],
+            }
+
             if is_new:
                 general_stats_expr += ", new_users = if_not_exists(new_users, :z) + :o"
+
             transaction_items.append(
                 {
                     "Update": {
@@ -419,7 +614,7 @@ def process_earn(payload, ip_address):
                             "SK": "GENERAL",
                         },
                         "UpdateExpression": general_stats_expr,
-                        "ExpressionAttributeValues": {":o": 1, ":z": 0},
+                        "ExpressionAttributeValues": general_stats_vals,
                     }
                 }
             )
@@ -441,18 +636,18 @@ def process_earn(payload, ip_address):
                 }
             )
 
-        # 5. Update Leaderboard
+        # 7. Update Leaderboard
         transaction_items.append(
             {
                 "Update": {
                     "TableName": metrics_table.name,
                     "Key": {
-                        "PK": f'LEADERBOARD#{periods["leaderboard_week"]}',
+                        "PK": f'LEADERBOARD#{current_periods["leaderboard_week"]}',
                         "SK": f"USER#{user_address}",
                     },
                     "UpdateExpression": "SET xp = if_not_exists(xp, :z) + :xp_val, first_xp_timestamp = if_not_exists(first_xp_timestamp, :ts)",
                     "ExpressionAttributeValues": {
-                        ":xp_val": 100,
+                        ":xp_val": xp_to_add,
                         ":z": 0,
                         ":ts": now_ts_iso,
                     },

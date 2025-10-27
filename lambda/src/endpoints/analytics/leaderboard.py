@@ -1,9 +1,8 @@
-import json
 from datetime import datetime, timezone
 from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Key
-from ..config import dynamodb, metrics_table
-from ..utils.utils import build_response, get_time_periods
+from ...config import dynamodb, metrics_table
+from ...utils.utils import build_response, get_time_periods
 
 
 def get_leaderboard(payload):
@@ -22,8 +21,8 @@ def get_leaderboard(payload):
 
         scope = payload.get("scope")
 
-        # Get limit from payload, default to 50, and cap it at the max
-        limit = min(int(payload.get("limit", 50)), MAX_LEADERBOARD_LIMIT)
+        # Get limit from payload, default to 100, and cap it at the max
+        limit = min(int(payload.get("limit", 100)), MAX_LEADERBOARD_LIMIT)
 
         last_key = payload.get("lastKey")
 
@@ -87,7 +86,7 @@ def get_leaderboard(payload):
         )
         return build_response(500, {"error": "Could not query leaderboard data"})
     except Exception as e:
-        print(f"An unexpected error occurred in get_leaderbody: {str(e)}")
+        print(f"An unexpected error occurred in get_leaderboard: {str(e)}")
         return build_response(500, {"error": "An internal server error occurred"})
 
 
@@ -145,33 +144,4 @@ def get_user_entry(payload):
         return build_response(500, {"error": "Could not query user rank data"})
     except Exception as e:
         print(f"An unexpected error occurred in get_user_entry: {str(e)}")
-        return build_response(500, {"error": "An internal server error occurred"})
-
-
-def handle(event):
-    """
-    Single endpoint to handle various analytics queries.
-    Routes to the appropriate processor based on the 'queryType' in the request body.
-    """
-    try:
-        body = json.loads(event.get("body", "{}"))
-        query_type = body.get("queryType")
-
-        # 'payload' is not needed here, the body *is* the payload
-        if not query_type:
-            return build_response(
-                400, {"error": "Request body must include 'queryType'"}
-            )
-
-        if query_type == "leaderboard":
-            return get_leaderboard(body)
-        elif query_type == "user_leaderboard_entry":
-            return get_user_entry(body)
-        else:
-            return build_response(400, {"error": f"Unknown queryType: '{query_type}'"})
-
-    except json.JSONDecodeError:
-        return build_response(400, {"error": "Invalid JSON body"})
-    except Exception as e:
-        print(f"An unexpected error occurred in handle_analytics: {str(e)}")
         return build_response(500, {"error": "An internal server error occurred"})
