@@ -8,12 +8,16 @@ from ...utils.utils import build_response, get_time_periods
 def get_leaderboard(payload):
     """
     Fetches paginated leaderboard data from the GSIs.
-    Payload:
-    {
+
+    QueryType: "get_leaderboard"
+    Payload: {
         "scope": "global" | "weekly",
-        "limit": 1000, // Optional, default 50, max 1000
-        "lastKey": { ... } // Optional, for pagination
+        "limit": 100,
+        "lastKey": {...}
     }
+
+    Returns:
+        Response with items array and lastKey for pagination
     """
     try:
         # Define a max limit to prevent abuse
@@ -93,11 +97,14 @@ def get_leaderboard(payload):
 def get_user_entry(payload):
     """
     Fetches the global and weekly leaderboard XP for a single user.
-    Note: This returns the user's XP, not their numerical rank.
-    Payload:
-    {
-        "user_address": "string" // Required
+
+    QueryType: "get_user_entry"
+    Payload: {
+        "user_address": "string"
     }
+
+    Returns:
+        Response with user_address, global_total_xp, and weekly_xp
     """
     try:
         user_address = payload.get("user_address")
