@@ -1,7 +1,8 @@
 import json
 from .utils.rate_limitter import rate_limit
 from .utils.utils import build_response
-from .endpoints import evm, solana, sui, prices, metrics
+from .endpoints import evm, solana, sui, prices
+from .endpoints.metrics import handler as metrics_handler
 from .endpoints.analytics import handler as analytics_handler
 
 
@@ -83,7 +84,7 @@ def lambda_handler(event, context):
     # Metrics & Analytics
     elif path == "/metrics" or path.endswith("/metrics"):
         if event["httpMethod"] == "POST":
-            return metrics.handle(event)
+            return metrics_handler.handle(event)
 
     elif path == "/analytics" or path.endswith("/analytics"):
         if event["httpMethod"] == "POST":

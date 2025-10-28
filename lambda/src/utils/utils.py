@@ -1,6 +1,8 @@
 import decimal
 import json
 from datetime import datetime, timedelta, timezone
+from botocore.exceptions import ClientError
+from ..config import metrics_table
 
 
 def get_client_ip(event):
@@ -100,6 +102,29 @@ class CustomDecimalEncoder(json.JSONEncoder):
                 return float(o)
         # Let the base class default method raise the TypeError for other types
         return super(CustomDecimalEncoder, self).default(o)
+
+
+def get_user_state(user_address):
+    """
+    Checks if a user is new and returns their last active time.
+    Returns:
+        (is_new_user, last_active_timestamp)
+    """
+    try:
+        response = metrics_table.get_item(
+            Key={"PK": f"USER#{user_address}", "SK": "STATS"},
+            ProjectionExpression="last_active_timestamp",
+        )
+        if "Item" not in response:
+            return (True, None)  # User is new
+        else:
+            # User exists, return their last active time
+            return (False, response["Item"].get("last_active_timestamp"))
+
+    except ClientError as e:
+        print(f"Error checking for new user {user_address}: {e}")
+        # Fail safe: assume not new and not active to prevent overcounting
+        return (False, datetime.now(timezone.utc).isoformat())
 
 
 def build_response(status_code, body):
