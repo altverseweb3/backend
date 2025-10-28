@@ -14,3 +14,4 @@ BUCKET_DURATION = 300  # 5 minutes in seconds
 
 # Special key for tracking the last database reset (Note: Not used in current code)
 RESET_TRACKER_KEY = "daily_reset_tracker"
+ANALYTICS_API_KEY = os.environ.get("ANALYTICS_API_KEY", None)

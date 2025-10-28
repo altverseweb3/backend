@@ -2,6 +2,16 @@
 
 These test events are designed to validate the functionality of the `/analytics` endpoint for both `leaderboard` and `user_leaderboard_entry` query types.
 
+All protected test events **must** include a `headers` object with a valid API key to pass. Public tests do not require this header.
+
+**Example `headers` block to add:**
+
+```json
+  "headers": {
+    "x-api-key": "API_KEY_GOES_HERE"
+  },
+```
+
 -----
 
 ### 1\. Fetch Total Users (All-Time)
