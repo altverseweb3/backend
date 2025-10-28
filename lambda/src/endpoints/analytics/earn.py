@@ -2,20 +2,27 @@ import json
 from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Key
 from ...config import metrics_table
-from ...utils.utils import build_response, get_past_periods
+from ...utils.utils import (
+    build_response,
+    get_past_periods,
+    validate_period_type,
+    validate_and_sanitize_limit,
+)
 
 
 def get_total_earn_stats(body):
     """
-    Fetches the global, all-time total earn count and a
-    breakdown by chain and protocol.
-    This is used for top-level KPI scorecards and donut charts.
+    Fetches the global, all-time total earn count and breakdown by chain and protocol.
 
     QueryType: "total_earn_stats"
     Body: {}
+
+    Returns:
+        Response with total earn count and breakdowns by chain, protocol,
+        and chain-protocol combinations
     """
     try:
-        # 1. Query the entire STAT#all#ALL partition
+        # Query the entire STAT#all#ALL partition
         # This efficiently gets both the GENERAL item and all EARN# items
         response = metrics_table.query(
             KeyConditionExpression=Key("PK").eq("STAT#all#ALL")
@@ -23,7 +30,7 @@ def get_total_earn_stats(body):
 
         items = response.get("Items", [])
 
-        # 2. Process the results
+        # Process the results
         total_earn_count = 0
         by_chain = {}
         by_protocol = {}
@@ -32,11 +39,11 @@ def get_total_earn_stats(body):
         for item in items:
             sk = item.get("SK")
 
-            # 2a. Get the total count from the GENERAL item
+            # Get the total count from the GENERAL item
             if sk == "GENERAL":
                 total_earn_count = item.get("earn_count", 0)
 
-            # 2b. Process breakdown items
+            # Process breakdown items
             elif sk and sk.startswith("EARN#"):
                 count = item.get("count", 0)
                 try:
@@ -58,7 +65,7 @@ def get_total_earn_stats(body):
                 except Exception as e:
                     print(f"Warning: Could not parse all-time earn SK '{sk}': {e}")
 
-        # 3. Return the combined data
+        # Return the combined data
         return build_response(
             200,
             {
@@ -77,35 +84,34 @@ def get_total_earn_stats(body):
 def get_periodic_earn_stats(body):
     """
     Fetches periodic aggregated earn statistics for the last 'limit' periods.
-    This is used to populate time-series charts for earn activity breakdowns.
 
     QueryType: "periodic_earn_stats"
     Body: {
         "period_type": "daily" | "weekly" | "monthly",
-        "limit": 8
+        "limit": 7
     }
+
+    Returns:
+        Response with period_type and array of period-based earn stats with
+        breakdowns by chain, protocol, and chain-protocol combinations
     """
     try:
         period_type = body.get("period_type", "daily")
-        try:
-            # Set reasonable bounds for limit to prevent abuse
-            limit = min(max(int(body.get("limit", 7)), 1), 90)
-        except (ValueError, TypeError):
-            limit = 7  # Default limit
+        limit = body.get("limit", 7)
 
-        if period_type not in ["daily", "weekly", "monthly"]:
-            return build_response(
-                400,
-                {
-                    "error": "Invalid period_type. Must be 'daily', 'weekly', or 'monthly'."
-                },
-            )
+        # Validate period type
+        is_valid, error_response = validate_period_type(period_type)
+        if not is_valid:
+            return error_response
 
-        # 1. Get the list of period start dates (e.g., ["2023-10-27", "2023-10-26", ...])
+        # Sanitize limit
+        limit = validate_and_sanitize_limit(limit, default=7, min_val=1, max_val=90)
+
+        # Get the list of period start dates
         period_starts = get_past_periods(period_type, limit)
 
         results = []
-        # 2. Query for each period in the list
+        # Query for each period in the list
         for period_start in period_starts:
             pk = f"STAT#{period_type}#{period_start}"
 
@@ -113,13 +119,13 @@ def get_periodic_earn_stats(body):
             response = metrics_table.query(
                 KeyConditionExpression=Key("PK").eq(pk)
                 & Key("SK").begins_with("EARN#"),
-                ProjectionExpression="SK, #c",  # Only fetch the SK and count
+                ProjectionExpression="SK, #c",
                 ExpressionAttributeNames={"#c": "count"},
             )
 
             items = response.get("Items", [])
 
-            # --- 3. Aggregate stats for this single period ---
+            # Aggregate stats for this single period
             period_by_chain = {}
             period_by_protocol = {}
             period_by_chain_protocol = {}  # This is the raw data from DDB
@@ -136,16 +142,16 @@ def get_periodic_earn_stats(body):
                         chain = parts[1]
                         protocol = parts[2]
 
-                        # 3a. Add to this period's total
+                        # Add to this period's total
                         period_total_earn += count
 
-                        # 3b. Add to the chain-protocol breakdown
+                        # Add to the chain-protocol breakdown
                         period_by_chain_protocol[f"{chain}#{protocol}"] = count
 
-                        # 3c. Aggregate by chain
+                        # Aggregate by chain
                         period_by_chain[chain] = period_by_chain.get(chain, 0) + count
 
-                        # 3d. Aggregate by protocol
+                        # Aggregate by protocol
                         period_by_protocol[protocol] = (
                             period_by_protocol.get(protocol, 0) + count
                         )
@@ -153,7 +159,7 @@ def get_periodic_earn_stats(body):
                 except Exception as e:
                     print(f"Warning: Could not parse earn SK '{sk}' in {pk}: {e}")
 
-            # 4. Add this period's aggregated data to the main results list
+            # Add this period's aggregated data to the main results list
             results.append(
                 {
                     "period_start": period_start,
@@ -164,7 +170,7 @@ def get_periodic_earn_stats(body):
                 }
             )
 
-        # 5. Return the data in descending order (most recent first)
+        # Return the data in descending order (most recent first)
         return build_response(200, {"period_type": period_type, "data": results})
 
     except ClientError as e:

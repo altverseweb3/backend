@@ -1,30 +1,34 @@
 import json
 from boto3.dynamodb.conditions import Key
 from ...config import metrics_table
-from ...utils.utils import build_response, get_past_periods
+from ...utils.utils import (
+    build_response,
+    get_past_periods,
+    validate_period_type,
+    validate_and_sanitize_limit,
+)
 
 
 def get_total_lending_stats(body):
     """
-    Fetches all-time lending stats:
-    1. The single "Total Lending Count" KPI.
-    2. The all-time breakdown by chain/market.
+    Fetches all-time lending stats with breakdown by chain and market.
 
     QueryType: "total_lending_stats"
     Body: {}
+
+    Returns:
+        Response with total lending count and breakdown by chain and market
     """
     try:
         pk_all = "STAT#all#ALL"
 
-        # 1. Get total lending count from the GENERAL item
-        # This fulfills the "Total Lending Count" KPI requirement.
+        # Get total lending count from the GENERAL item
         response_general = metrics_table.get_item(
             Key={"PK": pk_all, "SK": "GENERAL"}, ProjectionExpression="lending_count"
         )
         total_count = response_general.get("Item", {}).get("lending_count", 0)
 
-        # 2. Get all-time breakdown by querying for LENDING# items
-        # This fulfills the "Lending Market/Chain Breakdown" for an "all-time" view.
+        # Get all-time breakdown by querying for LENDING# items
         response_breakdown = metrics_table.query(
             KeyConditionExpression=Key("PK").eq(pk_all)
             & Key("SK").begins_with("LENDING#"),
@@ -57,30 +61,29 @@ def get_total_lending_stats(body):
 
 def get_periodic_lending_stats(body):
     """
-    Fetches periodic lending stats (total count and breakdown) for the last 'limit' periods.
-    This fulfills the "Lending Market/Chain Breakdown" for periodic views (daily, weekly, monthly).
+    Fetches periodic lending stats for the last 'limit' periods.
 
     QueryType: "periodic_lending_stats"
     Body: {
         "period_type": "daily" | "weekly" | "monthly",
         "limit": 7
     }
+
+    Returns:
+        Response with period_type and array of period-based lending stats
+        with breakdown by chain and market
     """
     try:
         period_type = body.get("period_type", "daily")
-        try:
-            # Set reasonable bounds for limit to prevent abuse
-            limit = min(max(int(body.get("limit", 7)), 1), 90)
-        except (ValueError, TypeError):
-            limit = 7  # Default limit
+        limit = body.get("limit", 7)
 
-        if period_type not in ["daily", "weekly", "monthly"]:
-            return build_response(
-                400,
-                {
-                    "error": "Invalid period_type. Must be 'daily', 'weekly', or 'monthly'."
-                },
-            )
+        # Validate period type
+        is_valid, error_response = validate_period_type(period_type)
+        if not is_valid:
+            return error_response
+
+        # Sanitize limit
+        limit = validate_and_sanitize_limit(limit, default=7, min_val=1, max_val=90)
 
         # Get the list of period start dates (e.g., ["2023-10-27", "2023-10-26", ...])
         period_starts = get_past_periods(period_type, limit)
@@ -114,9 +117,7 @@ def get_periodic_lending_stats(body):
                     # We can calculate the period's total by summing the breakdown
                     period_total += count
                 except (IndexError, TypeError):
-                    print(
-                        f"Error parsing SK for periodic lending stats: {item.get('SK')}"
-                    )
+                    print(f"Error parsing SK for periodic lending stats: {item.get('SK')}")
                     continue
 
             results.append(

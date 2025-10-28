@@ -117,3 +117,43 @@ def build_response(status_code, body):
         "body": json.dumps(body, cls=CustomDecimalEncoder).encode("utf-8"),
         "isBase64Encoded": True,
     }
+
+
+def validate_period_type(period_type):
+    """
+    Validates that the period_type is one of the allowed values.
+
+    Args:
+        period_type: The period type to validate
+
+    Returns:
+        tuple: (is_valid, error_response)
+               is_valid is True if valid, False otherwise
+               error_response is the response to return if invalid
+    """
+    if period_type not in ["daily", "weekly", "monthly"]:
+        return False, build_response(
+            400,
+            {"error": "Invalid period_type. Must be 'daily', 'weekly', or 'monthly'."},
+        )
+    return True, None
+
+
+def validate_and_sanitize_limit(limit, default=7, min_val=1, max_val=90):
+    """
+    Validates and sanitizes the limit parameter for analytics queries.
+
+    Args:
+        limit: The limit value to validate (can be string, int, or None)
+        default: Default value to use if limit is invalid
+        min_val: Minimum allowed value
+        max_val: Maximum allowed value
+
+    Returns:
+        int: Sanitized limit value within bounds
+    """
+    try:
+        # Set reasonable bounds for limit to prevent abuse
+        return min(max(int(limit), min_val), max_val)
+    except (ValueError, TypeError):
+        return default

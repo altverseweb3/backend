@@ -4,13 +4,21 @@ from ...config import dynamodb, metrics_table
 from ...utils.utils import (
     build_response,
     get_past_periods,
+    validate_period_type,
+    validate_and_sanitize_limit,
 )
 
 
 def get_total_activity_stats(body):
     """
     Fetches the global, all-time activity stats from the STAT#all#ALL item.
-    Corresponds to the 'Total Transactions' KPI.
+
+    QueryType: "total_activity_stats"
+    Body: {}
+
+    Returns:
+        Response with total transaction counts, swap/lending/earn breakdowns,
+        dapp entrances, and total users
     """
     try:
         response = metrics_table.get_item(Key={"PK": "STAT#all#ALL", "SK": "GENERAL"})
@@ -54,37 +62,32 @@ def get_periodic_activity_stats(body):
     """
     Fetches periodic activity stats for time-series charts.
 
-    Expected body:
-    {
-        "queryType": "periodic_activity_stats",
+    QueryType: "periodic_activity_stats"
+    Body: {
         "period_type": "daily" | "weekly" | "monthly",
-        "limit": 7,
+        "limit": 7
     }
+
+    Returns:
+        Response with array of period-based activity stats including transactions,
+        swap/lending/earn counts, dapp entrances, active users, and tx per user
     """
     try:
         period_type = body.get("period_type", "daily")
         limit = body.get("limit", 7)
 
-        # Basic Validation
-        if period_type not in ["daily", "weekly", "monthly"]:
-            return build_response(
-                400,
-                {
-                    "error": "Invalid 'period_type'. Must be 'daily', 'weekly', or 'monthly'."
-                },
-            )
-        if (
-            not isinstance(limit, int) or limit < 1 or limit > 90
-        ):  # 90-day/week/month max
-            return build_response(
-                400, {"error": "Invalid 'limit'. Must be an integer between 1 and 90."}
-            )
+        # Validate period type
+        is_valid, error_response = validate_period_type(period_type)
+        if not is_valid:
+            return error_response
 
-        # 1. Get the list of past period start dates (e.g., ['2023-10-27', '2023-10-26', ...])
-        # This assumes a utility function similar to your get_time_periods
+        # Sanitize limit
+        limit = validate_and_sanitize_limit(limit, default=7, min_val=1, max_val=90)
+
+        # Get the list of past period start dates
         period_dates = get_past_periods(period_type, limit)
 
-        # 2. Prepare keys for BatchGetItem
+        # Prepare keys for BatchGetItem
         keys_to_get = [
             {"PK": f"STAT#{period_type}#{date}", "SK": "GENERAL"}
             for date in period_dates
@@ -93,7 +96,7 @@ def get_periodic_activity_stats(body):
         if not keys_to_get:
             return build_response(200, [])
 
-        # 3. Fetch items in a batch
+        # Fetch items in a batch
         response = dynamodb.batch_get_item(
             RequestItems={
                 metrics_table.name: {
@@ -103,18 +106,16 @@ def get_periodic_activity_stats(body):
             }
         )
 
-        # 4. Process the response into a map for easy lookup
+        # Process the response into a map for easy lookup
         items = response.get("Responses", {}).get(metrics_table.name, [])
         stats_map = {item["PK"]: item for item in items}
 
-        # 5. Format the results, iterating over original dates to ensure order
-        #    and provide 0s for missing periods.
+        # Format the results, iterating over original dates to ensure order
+        # and provide 0s for missing periods
         results = []
         for date in period_dates:
             pk = f"STAT#{period_type}#{date}"
-            item = stats_map.get(
-                pk, {}
-            )  # Get item or empty dict if no data for that day
+            item = stats_map.get(pk, {})
 
             # Get counts, defaulting to 0
             swap = item.get("swap_count", 0)
@@ -125,8 +126,6 @@ def get_periodic_activity_stats(body):
 
             total_tx = swap + lending + earn
             tx_per_user = (total_tx / active_users) if active_users > 0 else 0
-
-            # This structure provides all data points for the "Overall Activity" charts
             results.append(
                 {
                     "period": date,

@@ -1,17 +1,23 @@
 import json
 from botocore.exceptions import ClientError
 from ...config import metrics_table
-from ...utils.utils import build_response, get_past_periods
+from ...utils.utils import (
+    build_response,
+    get_past_periods,
+    validate_period_type,
+    validate_and_sanitize_limit,
+)
 
 
 def get_total_users(body):
     """
     Fetches the all-time total user count.
-    Corresponds to: User & Audience -> Total Users
-    - Query: Get STAT#all#ALL, read `new_users`
 
     QueryType: "total_users"
     Body: {}
+
+    Returns:
+        Response with total_users count
     """
     try:
         response = metrics_table.get_item(
@@ -32,30 +38,29 @@ def get_total_users(body):
 
 def get_periodic_user_stats(body):
     """
-    Fetches new and active users for the last 'limit' periods (daily, weekly, monthly).
-    This is used to populate time-series charts for New Users and Active Users (DAU/WAU/MAU).
+    Fetches new and active users for the last 'limit' periods.
 
     QueryType: "periodic_user_stats"
     Body: {
         "period_type": "daily" | "weekly" | "monthly",
         "limit": 7
     }
+
+    Returns:
+        Response with period_type and array of period-based user stats
+        with new_users and active_users counts
     """
     try:
         period_type = body.get("period_type", "daily")
-        try:
-            # Set reasonable bounds for limit to prevent abuse
-            limit = min(max(int(body.get("limit", 7)), 1), 90)
-        except (ValueError, TypeError):
-            limit = 7  # Default limit
+        limit = body.get("limit", 7)
 
-        if period_type not in ["daily", "weekly", "monthly"]:
-            return build_response(
-                400,
-                {
-                    "error": "Invalid period_type. Must be 'daily', 'weekly', or 'monthly'."
-                },
-            )
+        # Validate period type
+        is_valid, error_response = validate_period_type(period_type)
+        if not is_valid:
+            return error_response
+
+        # Sanitize limit
+        limit = validate_and_sanitize_limit(limit, default=7, min_val=1, max_val=90)
 
         # Get the list of period start dates (e.g., ["2023-10-27", "2023-10-26", ...])
         period_starts = get_past_periods(period_type, limit)
@@ -83,7 +88,7 @@ def get_periodic_user_stats(body):
                 }
             )
 
-        # Return the data in descending order (most recent first)
+        # Return data in descending order (most recent first)
         return build_response(200, {"period_type": period_type, "data": results})
 
     except ClientError as e:
