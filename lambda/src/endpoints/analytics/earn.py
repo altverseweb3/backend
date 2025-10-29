@@ -171,7 +171,7 @@ def get_periodic_earn_stats(body):
             )
 
         # Return the data in descending order (most recent first)
-        return build_response(200, {"period_type": period_type, "data": results})
+        return build_response(200, results)
 
     except ClientError as e:
         print(f"Error in get_periodic_earn_stats: {e}")

@@ -129,7 +129,7 @@ def get_periodic_lending_stats(body):
             )
 
         # Return the data in descending order (most recent first)
-        return build_response(200, {"period_type": period_type, "data": results})
+        return build_response(200, results)
 
     except Exception as e:
         print(f"Error in get_periodic_lending_stats: {str(e)}")
