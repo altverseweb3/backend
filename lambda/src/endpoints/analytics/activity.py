@@ -128,7 +128,7 @@ def get_periodic_activity_stats(body):
             tx_per_user = (total_tx / active_users) if active_users > 0 else 0
             results.append(
                 {
-                    "period": date,
+                    "period_start": date,
                     "total_transactions": total_tx,
                     "swap_count": swap,
                     "lending_count": lending,
